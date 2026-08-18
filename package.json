@@ -1,0 +1,15 @@
+{
+  "name": "root-cause-game",
+  "private": true,
+  "scripts": {
+    "backend:dev": "convex dev",
+    "backend:deploy": "convex deploy",
+    "backend:check": "convex codegen && tsc -p convex/tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "convex": "1.44.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2"
+  }
+}
