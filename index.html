@@ -53,6 +53,9 @@
   .lbtn:hover:not(:disabled){border-color:var(--violet)}
   .lbtn:disabled{opacity:.35;cursor:default}
   .binfo{font-size:.72rem;color:var(--muted);letter-spacing:.1em}
+  #muteBtn{position:fixed;bottom:12px;right:12px;z-index:30;width:34px;height:34px;border-radius:8px;
+    background:rgba(20,14,34,.9);border:1px solid #33265a;color:var(--bone);font-size:15px;cursor:pointer;line-height:1;padding:0}
+  #muteBtn:hover{border-color:var(--violet)}
   #tune{position:fixed;top:10px;right:10px;z-index:30;background:rgba(20,14,34,.95);border:1px solid #33265a;border-radius:8px;
     padding:12px 14px;font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--bone);width:236px}
   #tune h4{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);margin-bottom:9px;font-weight:400}
@@ -67,6 +70,7 @@
 </head>
 <body>
 <canvas id="game"></canvas>
+<button id="muteBtn" aria-label="mute sound" title="mute (M)">🔊</button>
 <div id="tune" class="hidden"></div>
 
 <div id="start" class="overlay">
@@ -244,7 +248,108 @@ let wave = 0, waveState = 'break', waveBudget = 0, waveSpawned = 0, waveSpawnClo
 let bossLabel = 'BUG';   // production-incident label drawn on the boss
 let revealT = 0, agentClock = 6, incomingMul = 1;
 let masteredOnce = [false, false, false];
-const TUNE = { xp:0.80, playerDmg:0.85, enemyHp:1.45, heal:0.25, pickupRate:0.85, techDebt:0.090, spawn:1.00 };
+const TUNE = { xp:0.80, playerDmg:1.05, enemyHp:1.25, heal:0.45, pickupRate:0.85, techDebt:0.090, spawn:1.00 };
+
+// ---- synthesized SFX engine (Web Audio; spacey bleep-bloop, zero assets) ----
+const Sound = (function(){
+  let ctx = null, master = null, wet = null, nbuf = null, muted = false;
+  let lastFire = 0, lastKill = 0, lastHurt = 0, lastTick = 0, lastWub = 0;
+  let droneGain = null, droneFilter = null, bossOn = false;
+  function init(){
+    if (ctx) return;
+    const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
+    ctx = new AC();
+    master = ctx.createGain(); master.gain.value = 0.32; master.connect(ctx.destination);
+    const delay = ctx.createDelay(); delay.delayTime.value = 0.15;
+    const fb = ctx.createGain(); fb.gain.value = 0.25; delay.connect(fb); fb.connect(delay); delay.connect(master);
+    wet = ctx.createGain(); wet.gain.value = 1; wet.connect(delay);
+    nbuf = ctx.createBuffer(1, ctx.sampleRate * 0.6, ctx.sampleRate);
+    const d = nbuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random()*2-1;
+    startAmbient();
+  }
+  function T(){ return ctx.currentTime; }
+  function voice(freq, o){ o = o || {}; const t0 = T() + (o.t0||0), dur = o.dur||0.15, peak = o.peak||0.2;
+    const osc = ctx.createOscillator(); osc.type = o.type || 'sine'; osc.frequency.setValueAtTime(freq, t0);
+    if (o.freqEnd) osc.frequency.exponentialRampToValueAtTime(Math.max(1, o.freqEnd), t0 + dur);
+    if (o.detune) osc.detune.value = o.detune;
+    const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t0);
+    g.gain.linearRampToValueAtTime(peak, t0 + (o.attack||0.006));
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    osc.connect(g); g.connect(master); if (o.space) { const w2 = ctx.createGain(); w2.gain.value = o.space; g.connect(w2); w2.connect(wet); }
+    osc.start(t0); osc.stop(t0 + dur + 0.03);
+  }
+  function noise(o){ o = o || {}; const t0 = T() + (o.t0||0), dur = o.dur||0.2, peak = o.peak||0.2;
+    const n = ctx.createBufferSource(); n.buffer = nbuf;
+    const f = ctx.createBiquadFilter(); f.type = o.filter || 'highpass'; f.frequency.value = o.freq || 1000;
+    const g = ctx.createGain(); g.gain.setValueAtTime(peak, t0); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    n.connect(f); f.connect(g); g.connect(master); if (o.space){ const w2 = ctx.createGain(); w2.gain.value = o.space; g.connect(w2); w2.connect(wet); }
+    n.start(t0); n.stop(t0 + dur + 0.03);
+  }
+  function startAmbient(){
+    droneFilter = ctx.createBiquadFilter(); droneFilter.type = 'lowpass'; droneFilter.frequency.value = 300;
+    droneGain = ctx.createGain(); droneGain.gain.value = 0.0001;
+    droneFilter.connect(droneGain); droneGain.connect(master);
+    const chorus = ctx.createGain(); chorus.gain.value = 0.6; chorus.connect(master);
+    const spaceSend = ctx.createGain(); spaceSend.gain.value = 0.5; droneGain.connect(spaceSend); spaceSend.connect(wet);
+    // chorus — three delay voices with slow LFO-modulated delay times for shimmer/movement
+    const rate = [0.11, 0.18, 0.27], depth = [0.004, 0.003, 0.0035], base = [0.017, 0.023, 0.031];
+    for (let i = 0; i < 3; i++){ const d = ctx.createDelay(); d.delayTime.value = base[i];
+      const lfo = ctx.createOscillator(); lfo.type = 'sine'; lfo.frequency.value = rate[i];
+      const lg = ctx.createGain(); lg.gain.value = depth[i]; lfo.connect(lg); lg.connect(d.delayTime); lfo.start();
+      droneGain.connect(d); d.connect(chorus); }
+    // oscillator bank with slow detune drift (variation)
+    const freqs = [55, 82.5, 110, 165], types = ['sine', 'sine', 'triangle', 'sine'], gains = [0.55, 0.3, 0.14, 0.06];
+    for (let i = 0; i < freqs.length; i++){ const o = ctx.createOscillator(); o.type = types[i]; o.frequency.value = freqs[i]; o.detune.value = (i-1)*7;
+      const g = ctx.createGain(); g.gain.value = gains[i]; o.connect(g); g.connect(droneFilter);
+      const dl = ctx.createOscillator(); dl.type = 'sine'; dl.frequency.value = 0.03 + i*0.017;
+      const dg = ctx.createGain(); dg.gain.value = 6 + i*3; dl.connect(dg); dg.connect(o.detune); dl.start(); o.start(); }
+    // two swell LFOs at different rates => non-repeating rise and fall
+    const l1 = ctx.createOscillator(); l1.type = 'sine'; l1.frequency.value = 0.06; const g1 = ctx.createGain(); g1.gain.value = 0.045; l1.connect(g1); g1.connect(droneGain.gain); l1.start();
+    const l2 = ctx.createOscillator(); l2.type = 'sine'; l2.frequency.value = 0.023; const g2 = ctx.createGain(); g2.gain.value = 0.03; l2.connect(g2); g2.connect(droneGain.gain); l2.start();
+    // slow filter sweep for movement
+    const lf = ctx.createOscillator(); lf.type = 'sine'; lf.frequency.value = 0.045; const lfg = ctx.createGain(); lfg.gain.value = 150; lf.connect(lfg); lfg.connect(droneFilter.frequency); lf.start();
+    droneGain.gain.setValueAtTime(0.0001, T()); droneGain.gain.linearRampToValueAtTime(0.14, T() + 3);
+  }
+  function setBoss(on){ if (!droneGain || bossOn === on) return; bossOn = on; const t = T();
+    droneGain.gain.cancelScheduledValues(t); droneGain.gain.setValueAtTime(droneGain.gain.value, t); droneGain.gain.linearRampToValueAtTime(on ? 0.28 : 0.14, t + 1.5);
+    droneFilter.frequency.cancelScheduledValues(t); droneFilter.frequency.setValueAtTime(droneFilter.frequency.value, t); droneFilter.frequency.linearRampToValueAtTime(on ? 640 : 300, t + 1.5);
+  }
+  const PP = { fever:430, interferon:620, complement:520, histamine:700, opsonin:560, marrow:660 };
+  function play(name, arg){
+    if (!ctx || muted) return; if (ctx.state === 'suspended') ctx.resume();
+    const t = performance.now();
+    switch (name){
+      case 'fire': if (t - lastFire < 70) return; lastFire = t; voice(660 + rand(-40,40), {type:'square', dur:0.05, peak:0.022, freqEnd:430, space:0.04}); break;
+      case 'tick': if (t - lastTick < 45) return; lastTick = t; { const f = arg || 520; voice(f, {type:'triangle', dur:0.04, peak:0.02, freqEnd:f*0.7, space:0.05}); } break;
+      case 'wub': { if (t - lastWub < 140) return; lastWub = t; const t0 = T();
+        const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.setValueAtTime(72, t0); o.frequency.exponentialRampToValueAtTime(46, t0 + 0.42);
+        const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 190; f.Q.value = 9;
+        const g = ctx.createGain(); o.connect(f); f.connect(g); g.connect(master); const sp = ctx.createGain(); sp.gain.value = 0.3; g.connect(sp); sp.connect(wet);
+        g.gain.setValueAtTime(0.0001, t0);
+        g.gain.linearRampToValueAtTime(0.24, t0 + 0.02); g.gain.linearRampToValueAtTime(0.05, t0 + 0.10);
+        g.gain.linearRampToValueAtTime(0.22, t0 + 0.17); g.gain.linearRampToValueAtTime(0.04, t0 + 0.25);
+        g.gain.linearRampToValueAtTime(0.16, t0 + 0.31); g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.42);
+        o.start(t0); o.stop(t0 + 0.45); } break;
+      case 'kill': if (t - lastKill < 22) return; lastKill = t; voice(520 + rand(-70,140), {type:'triangle', dur:0.12, peak:0.11, freqEnd:170, space:0.3}); break;
+      case 'bosskill':
+        voice(440, {type:'sawtooth', dur:0.55, peak:0.24, freqEnd:48, space:0.45});
+        voice(300, {type:'triangle', dur:0.6, peak:0.16, freqEnd:40, detune:-8, space:0.45});
+        noise({dur:0.5, peak:0.2, filter:'lowpass', freq:900, space:0.3});
+        for (let i = 0; i < 5; i++) voice(rand(300,900), {type:'square', t0:rand(0,0.28), dur:0.05, peak:0.06}); break;
+      case 'hurt': if (t - lastHurt < 90) return; lastHurt = t; noise({dur:0.16, peak:0.16, filter:'lowpass', freq:520, space:0.1}); voice(150, {type:'sawtooth', dur:0.18, peak:0.13, freqEnd:80}); break;
+      case 'pickup': { const b = PP[arg] || 520; voice(b, {type:'triangle', dur:0.1, peak:0.15, space:0.3}); voice(b*1.5, {type:'triangle', t0:0.06, dur:0.13, peak:0.15, space:0.35}); break; }
+      case 'levelup': for (let i=0;i<4;i++) voice(440*Math.pow(1.26,i), {type:'triangle', t0:i*0.075, dur:0.18, peak:0.13, space:0.4}); break;
+      case 'discharge': noise({dur:0.35, peak:0.22, filter:'highpass', freq:1100, space:0.25}); voice(820, {type:'sawtooth', dur:0.42, peak:0.18, freqEnd:55, space:0.2}); for (let i=0;i<5;i++) voice(rand(420,1500), {type:'square', t0:rand(0,0.22), dur:0.04, peak:0.05}); break;
+      case 'shield': voice(1300, {type:'triangle', dur:0.12, peak:0.13, freqEnd:1950, space:0.35}); noise({dur:0.12, peak:0.09, filter:'bandpass', freq:2600}); break;
+      case 'bossspawn': voice(70, {type:'sine', dur:1.3, peak:0.3, freqEnd:50, space:0.4}); voice(104, {type:'sawtooth', dur:1.3, peak:0.07, freqEnd:76, detune:9, space:0.4}); break;
+      case 'telegraph': voice(300, {type:'sawtooth', dur:0.32, peak:0.13, freqEnd:1000, space:0.25}); break;
+      case 'gameover': for (let i=0;i<3;i++) voice(440/Math.pow(1.32,i), {type:'triangle', t0:i*0.19, dur:0.42, peak:0.16, space:0.45}); break;
+      case 'click': voice(760, {type:'square', dur:0.03, peak:0.07, freqEnd:600}); break;
+    }
+  }
+  return { init, play, setBoss, toggle(){ muted = !muted; if (master) master.gain.value = muted ? 0 : 0.32; return muted; }, muted(){ return muted; } };
+})();
+
 const SHIELDABLE = { bacterium:1, virus:1, divider:1, biofilm:1, mutant:1, hider:1, encap:1, toxin:1, superbug:1, shooter:1 };
 let pendingLevels = 0;
 const banished = new Set();
@@ -503,7 +608,7 @@ const SPRITES = {
     c.beginPath(); c.arc(ox, oy, SEER.EYER, 0, TAU); c.fill();
     c.restore();
   },
-  bacterium(c, x, y, frame, facing, e){ blit(IMG.bacterium[e.flash>0?1:0], x, y, 0, 1 + Math.sin(frame*3)*.05); },
+  bacterium(c, x, y, frame, facing, e){ blit(IMG.bacterium[e.flash>0?1:0], x, y, 0, (1 + Math.sin(frame*3)*.05) * (e.sizeMul || 1)); },
   divider(c, x, y, frame, facing, e){ blit(IMG.divider[e.flash>0?1:0], x, y, 0, 1 + Math.sin(frame*3+1)*.06); },
   virus(c, x, y, frame, facing, e){ blit(IMG.virus[e.flash>0?1:0], x, y, 0, 1 + Math.sin(frame*5)*.07); },
   mutant(c, x, y, frame, facing, e){                        // Race Condition — chip in current platform colour
@@ -615,7 +720,7 @@ const EN = {
   biofilm:   { r:22, speed:38,  hp:110, dmg:16, xp:3 },
   superbug:  { r:30, speed:46,  hp:420, dmg:22, xp:0 },
   agent:     { r:15, speed:56,  hp:74,  dmg:14, xp:0 },
-  boss:      { r:46, speed:40,  hp:1400,dmg:30, xp:0 },
+  boss:      { r:115, speed:40, hp:1400,dmg:30, xp:0 },
   bomber:    { r:15, speed:72,  hp:46,  dmg:0,  xp:2 },   // explodes if it reaches you
   shooter:   { r:12, speed:60,  hp:36,  dmg:0,  xp:2 }    // fires from range
 };
@@ -637,7 +742,7 @@ function spawnPatho(kind, atx, aty){
   e.capMax = e.capsule = kind === 'encap' ? 55 : 0;
   e.toxT = kind === 'toxin' ? rand(1.5, 2.5) : 0;
   e.seedT = kind === 'biofilm' ? rand(4, 6) : 0;
-  e.atkT = kind === 'shooter' ? rand(0.6, 1.6) : 0; e.enraged = false; e.frozenT = 0; e.frozenMul = 1; e.markT = 0; e.markAmp = 1; e.beamT = 0; e.primed = false; e.reactT = 0; e.reactCD = 0; e.shields = null; e.attackT = 0; e.attackFired = 0; e.megaCD = 0;
+  e.atkT = kind === 'shooter' ? rand(0.6, 1.6) : 0; e.enraged = false; e.frozenT = 0; e.frozenMul = 1; e.markT = 0; e.markAmp = 1; e.beamT = 0; e.primed = false; e.reactT = 0; e.reactCD = 0; e.shields = null; e.attackT = 0; e.attackFired = 0; e.megaCD = 0; e.sizeMul = 1;
   e.benign = kind === 'agent'; e.rogueCapable = false; e.rogueT = 0; e.grow = 0; e.baseR = e.r;
   e.hoard = 0; e.emitT = 0; e.vx = 0; e.vy = 0; e.wanderA = rand(0, TAU); e.lean = 0; e.legPhase = rand(0, 6);
   if (kind === 'agent') e.dmg = 0;
@@ -692,7 +797,7 @@ function spawnBoss(n){
   const langs = [0, 1, 2]; for (let i = langs.length - 1; i > 0; i--){ const j = (Math.random()*(i+1))|0; const t = langs[i]; langs[i] = langs[j]; langs[j] = t; }
   e.shields = []; const shp = Math.max(120, e.maxHp * 0.09);   // per-layer shield HP (tunable)
   for (let i = 0; i < tier; i++) e.shields.push({ lang: langs[i % 3], hp: shp, max: shp });
-  placeAtRing(e); bossRef = e;
+  placeAtRing(e); bossRef = e; Sound.play('bossspawn'); Sound.setBoss(true);
 }
 /* ---------- AI agent behaviour (benign drift/steal · rogue flee/emit) ---------- */
 const agentRefs = [];
@@ -741,7 +846,7 @@ function agentMove(e, dt){
     let tg = null, td = Infinity;
     for (let i = 0; i < antigens.n; i++){ const g = antigens.a[i]; const dd = dist2(g.x, g.y, e.x, e.y); if (dd < td){ td = dd; tg = g; } }
     if (tg && td < (e.r + 14)*(e.r + 14)){ for (let i = 0; i < antigens.n; i++){ if (antigens.a[i] === tg){ antigens.kill(i); break; } } feedAgent(e); }
-    e.emitT -= dt; if (e.emitT <= 0 && e.emitN < 10){ e.emitT = 4.4; if (pathos.n < MAX_PATHO) spawnPatho('bacterium', e.x, e.y); e.emitN++; burst(e.x, e.y, '#ee4d9b', 5); }
+    e.emitT -= dt; if (e.emitT <= 0 && e.emitN < 10){ e.emitT = 4.4; if (pathos.n < MAX_PATHO){ const b = spawnPatho('bacterium', e.x, e.y); if (b){ b.sizeMul = 0.75; b.r *= 0.75; } } e.emitN++; burst(e.x, e.y, '#ee4d9b', 5); }
     const far = Math.hypot(W, H) * 0.7;
     if (dist2(e.x, e.y, player.x, player.y) > far*far){ const a = Math.atan2(player.y - e.y, player.x - e.x); e.vx += Math.cos(a)*e.speed*4*dt; e.vy += Math.sin(a)*e.speed*4*dt; }
   }
@@ -798,7 +903,7 @@ const _ti = [], _td = [];
 function fireAntibodies(dt){
   const w = player.weapons.antibody; if (!w) return; w.cd -= dt;
   if (w.cd > 0 || !pathos.n) return;
-  w.cd = w.rate * player.cdMul; _ti.length = 0; _td.length = 0;
+  w.cd = w.rate * player.cdMul; _ti.length = 0; _td.length = 0; Sound.play('fire');
   const k = w.count + player.amount;
   for (let i = 0; i < pathos.n; i++){
     const e = pathos.a[i]; if (e.hidden || e.benign) continue;
@@ -816,7 +921,7 @@ function fireAntibodies(dt){
     const a = Math.atan2(t.y - player.y, t.x - player.x) + (i >= _ti.length ? rand(-.2, .2) : 0);
     const b = shots.get();
     b.x = player.x; b.y = player.y; b.vx = Math.cos(a)*480; b.vy = Math.sin(a)*480;
-    b.dmg = w.dmg; b.life = 1.6 * player.durMul; b.facing = a; b.pierce = !!w.evolved; b.hit.length = 0;
+    b.dmg = w.dmg; b.life = 1.6 * player.durMul; b.facing = a; b.pierce = !!w.evolved; b.hit.length = 0; b.scale = 0.8 + (w.lvl - 1) * 0.11;
   }
 }
 function updateNK(dt){
@@ -850,12 +955,12 @@ function updateCTL(dt){
   const w = player.weapons.ctl; if (!w) return;
   w.cd -= dt;
   if (w.cd <= 0 && pathos.n){
-    w.cd = w.rate * player.cdMul;
+    w.cd = w.rate * player.cdMul; Sound.play('tick', 900);
     revealT = 4;   // firing Trace reveals + weakens all rogue agents
     let t = null, td = Infinity;
     for (let i = 0; i < pathos.n; i++){ const e = pathos.a[i]; if (e.hidden || e.benign) continue; const d = dist2(e.x, e.y, player.x, player.y); if (d < td){ td = d; t = e; } }
     if (t){ const a = Math.atan2(t.y - player.y, t.x - player.x); const b = ctls.get();
-      b.x = player.x; b.y = player.y; b.vx = Math.cos(a)*640; b.vy = Math.sin(a)*640; b.dmg = w.dmg; b.life = 1.1 * player.durMul; b.facing = a; b.hit.length = 0; }
+      b.x = player.x; b.y = player.y; b.vx = Math.cos(a)*640; b.vy = Math.sin(a)*640; b.dmg = w.dmg; b.life = 1.1 * player.durMul; b.facing = a; b.hit.length = 0; b.scale = 0.8 + (w.lvl - 1) * 0.11; }
   }
   for (let i = 0; i < ctls.n; i++){
     const b = ctls.a[i]; b.x += b.vx*dt; b.y += b.vy*dt; b.life -= dt;
@@ -871,7 +976,7 @@ function updateLysozyme(dt){
   const w = player.weapons.lysozyme; if (!w) return;
   w.cd -= dt;
   if (w.cd <= 0){
-    w.cd = w.rate * player.cdMul;
+    w.cd = w.rate * player.cdMul; Sound.play('tick', 300);
     const p = pulses.get(); p.x = player.x; p.y = player.y; p.r = 0; p.pr = 0;
     p.maxR = w.radius * player.areaMul; p.maxLife = p.life = 0.55; p.dmg = w.dmg; p.hit.length = 0;
     if (w.evolved){ const p2 = pulses.get(); p2.x = player.x; p2.y = player.y; p2.r = 0; p2.pr = 0;
@@ -895,7 +1000,7 @@ function updateFibrin(dt){
   const w = player.weapons.fibrin; if (!w) return;
   w.cd -= dt;
   if (w.cd <= 0){
-    w.cd = w.rate * player.cdMul;
+    w.cd = w.rate * player.cdMul; Sound.play('tick', 640);
     const n = nets.get(); n.x = player.x; n.y = player.y; n.r = 0; n.pr = 0;
     n.maxR = w.r * player.areaMul; n.maxLife = n.life = 0.35;   // quick spread, then gone
     n.freeze = w.life * player.durMul; n.slow = w.slow; n.hit.length = 0;
@@ -918,7 +1023,7 @@ function updateHelper(dt){
   const w = player.weapons.helper; if (!w) return;
   w.cd -= dt;
   const fire = w.cd <= 0 && pathos.n;
-  if (fire) w.cd = w.rate * player.cdMul;
+  if (fire){ w.cd = w.rate * player.cdMul; Sound.play('tick', 470); }
   const hc = w.count;
   for (let i = 0; i < hc; i++){
     const ang = player.frame * 0.7 + i / hc * TAU;
@@ -928,7 +1033,7 @@ function updateHelper(dt){
       let t = null, td = Infinity;
       for (let k = 0; k < pathos.n; k++){ const e = pathos.a[k]; if (e.hidden || e.benign) continue; const d = dist2(e.x, e.y, hx, hy); if (d < td){ td = d; t = e; } }
       if (t){ const a = Math.atan2(t.y - hy, t.x - hx); const b = shots.get();
-        b.x = hx; b.y = hy; b.vx = Math.cos(a)*440; b.vy = Math.sin(a)*440; b.dmg = w.dmg; b.life = 1.4; b.facing = a; b.pierce = false; b.hit.length = 0; }
+        b.x = hx; b.y = hy; b.vx = Math.cos(a)*440; b.vy = Math.sin(a)*440; b.dmg = w.dmg; b.life = 1.4; b.facing = a; b.pierce = false; b.hit.length = 0; b.scale = 0.85; }
     }
   }
 }
@@ -937,7 +1042,7 @@ function updateDeploy(dt){
   const w = player.weapons.deploy; if (!w) return;
   w.cd -= dt;
   if (w.cd <= 0 && pathos.n){
-    w.cd = w.rate * player.cdMul;
+    w.cd = w.rate * player.cdMul; Sound.play('tick', 250);
     const R = w.r * player.areaMul;
     let best = null, bestN = -1, tries = Math.min(pathos.n, 14);
     for (let s = 0; s < tries; s++){
@@ -974,7 +1079,7 @@ function updateRateLimit(dt){
 function updateDeprecate(dt){
   const w = player.weapons.deprecate; if (!w) return;
   w.cd -= dt; if (w.cd > 0 || !pathos.n) return;
-  w.cd = w.rate * player.cdMul;
+  w.cd = w.rate * player.cdMul; Sound.play('tick', 380);
   let t = null, td = Infinity;
   for (let i = 0; i < pathos.n; i++){ const e = pathos.a[i]; if (e.hidden || e.benign) continue; const d = dist2(e.x, e.y, player.x, player.y); if (d < td){ td = d; t = e; } }
   if (!t) return;
@@ -1005,7 +1110,7 @@ function updateRoundtrip(dt){
   const w = player.weapons.roundtrip; if (!w) return;
   w.cd -= dt;
   if (w.cd <= 0 && pathos.n){
-    w.cd = w.rate * player.cdMul;
+    w.cd = w.rate * player.cdMul; Sound.play('tick', 560);
     let t = null, td = Infinity;
     for (let i = 0; i < pathos.n; i++){ const e = pathos.a[i]; if (e.hidden || e.benign) continue; const d = dist2(e.x, e.y, player.x, player.y); if (d < td){ td = d; t = e; } }
     const baseA = t ? Math.atan2(t.y - player.y, t.x - player.x) : (player.facing || 0);
@@ -1014,7 +1119,7 @@ function updateRoundtrip(dt){
       const a = baseA + (k - (cnt - 1) / 2) * 0.3;
       const b = booms.get();
       b.x = player.x; b.y = player.y; b.vx = Math.cos(a)*w.speed; b.vy = Math.sin(a)*w.speed;
-      b.dmg = w.dmg; b.phase = 0; b.dist = 0; b.range = w.range * player.durMul; b.speed = w.speed; b.life = 5; b.hit.length = 0;
+      b.dmg = w.dmg; b.phase = 0; b.dist = 0; b.range = w.range * player.durMul; b.speed = w.speed; b.life = 5; b.hit.length = 0; b.scale = 0.72 + (w.lvl - 1) * 0.15;
     }
   }
   for (let i = 0; i < booms.n; i++){
@@ -1057,7 +1162,7 @@ function hitPatho(e, dmg, knockA, src){
     if (!matched && Math.random() < 0.4) burst(e.x, e.y, '#8a8a8a', 2);
     if (sh.hp <= 0){ e.shields.pop();
       player.mastery[sh.lang] = Math.min(1, player.mastery[sh.lang] + 1/15);
-      burst(e.x, e.y, STRAINS[sh.lang].c, 20); shake = Math.max(shake, 8);
+      burst(e.x, e.y, STRAINS[sh.lang].c, 20); shake = Math.max(shake, 8); Sound.play('shield');
       if (player.mastery[sh.lang] >= 1 && !masteredOnce[sh.lang]){ masteredOnce[sh.lang] = true;
         banners.push({ text: STRAINS[sh.lang].n.toUpperCase() + ' MASTERED', sub: 'you shred ' + STRAINS[sh.lang].n + ' shields on contact', life: 2.4, color: STRAINS[sh.lang].c }); }
       if (e.shields.length === 0) banners.push({ text: 'CONTEXT RESTORED', sub: 'the incident is exposed — resolve it', life: 2, color: '#6cc406' });
@@ -1072,7 +1177,7 @@ function hitPatho(e, dmg, knockA, src){
     if (e.shieldHp <= 0){
       e.shieldHp = 0; e.shieldMax = 0;
       player.mastery[lang] = Math.min(1, player.mastery[lang] + 1/15);
-      burst(e.x, e.y, STRAINS[lang].c, 16); shake = Math.max(shake, 4);
+      burst(e.x, e.y, STRAINS[lang].c, 16); shake = Math.max(shake, 4); Sound.play('shield');
       if (player.mastery[lang] >= 1 && !masteredOnce[lang]){ masteredOnce[lang] = true;
         banners.push({ text: STRAINS[lang].n.toUpperCase() + ' MASTERED', sub: 'you shred ' + STRAINS[lang].n + ' shields on contact', life: 2.4, color: STRAINS[lang].c }); }
     }
@@ -1090,6 +1195,7 @@ function hitPatho(e, dmg, knockA, src){
   if (e.hp <= 0) killPatho(e);
 }
 function killPatho(e){
+  Sound.play(e.kind === 'boss' ? 'bosskill' : 'kill');
   e.dead = true; cleared++;
   if (player.lifesteal) player.hp = Math.min(player.maxHp, player.hp + player.lifesteal * TUNE.heal);
   memKills[e.kind] = (memKills[e.kind] || 0) + 1;
@@ -1100,7 +1206,7 @@ function killPatho(e){
   const col = e.kind === 'superbug' || e.kind === 'boss' ? '#ff9d2e' : e.kind === 'virus' || e.kind === 'mutant' ? '#d05ce8' : '#8fd46a';
   burst(e.x, e.y, col, e.kind === 'biofilm' || e.kind === 'superbug' || e.kind === 'boss' ? 16 : 8);
   if (e.kind === 'boss'){
-    bossRef = null; shake = Math.max(shake, 14);
+    bossRef = null; shake = Math.max(shake, 14); Sound.setBoss(false);
     for (let i = 0; i < 6; i++) dropAntigen(e.x + rand(-40,40), e.y + rand(-40,40), 10);
     dropConsumable(e.x - 20, e.y, true); dropConsumable(e.x + 20, e.y, true);
     banners.push({ text: 'INCIDENT RESOLVED', sub: 'production is green again', life: 2.8, color: '#6cc406' });
@@ -1142,6 +1248,7 @@ function dropConsumable(x, y, guaranteed){
 const DROP_COLOR = { fever:'#f7943e', interferon:'#12a5c9', complement:'#8b6df0', histamine:'#6cc406', opsonin:'#ffd21e', marrow:'#6cc406' };
 function activatePickup(type){
   const p = PICKUPS[type], col = DROP_COLOR[type] || '#ffffff';
+  Sound.play('pickup', type);
   p.fn();
   // signature grab burst: ring of particles + a brief screen flash in the pickup's colour
   for (let i = 0; i < 26; i++){ const a = Math.random()*TAU, sp = rand(140, 380), pt = parts.get();
@@ -1181,7 +1288,7 @@ function cytokineDischarge(){
     p.x = player.x; p.y = player.y; p.vx = Math.cos(a)*rand(120,360); p.vy = Math.sin(a)*rand(120,360);
     p.life = rand(.3,.6); p.color = '#a78bff'; p.r = rand(2,4); if (parts.n >= MAX_PARTS) break; }
   banners.push({ text: 'AUTOFIX SHIPPED', sub: 'merge-ready patch cleared the board', life: 1.6, color: '#a78bff' });
-  cyto = 0; shake = Math.max(shake, 10);
+  cyto = 0; shake = Math.max(shake, 10); Sound.play('discharge');
   boltT = boltDur; boltCX = player.x; boltCY = player.y; flashT = 0.28; flashColor = '#dffbff';
 }
 function triggerStorm(){
@@ -1352,7 +1459,7 @@ function rollOffers(){
   curOffers = picks.map(offerCard);
 }
 function openLevelUp(){
-  state = 'levelup';
+  state = 'levelup'; Sound.play('levelup');
   rollOffers();
   renderLevelup();
   document.getElementById('levelup').classList.remove('hidden');
@@ -1371,7 +1478,7 @@ function renderLevelup(){
     const banishBtn = (player.banishes > 0 && c.key) ? '<button class="ban" title="Mute this option for the run">✕</button>' : '';
     el.innerHTML = tagHtml + '<h3>' + c.name + '</h3><p>' + c.desc + '</p>' + banishBtn;
     if (c.evo) el.style.borderColor = '#ffd21e';
-    el.onclick = () => { c.apply(); resolveLevelup(); };
+    el.onclick = () => { Sound.play('click'); c.apply(); resolveLevelup(); };
     const bb = el.querySelector('.ban');
     if (bb) bb.onclick = ev => { ev.stopPropagation(); banished.add(c.key); player.banishes--; rollOffers(); renderLevelup(); };
     row.appendChild(el);
@@ -1442,7 +1549,7 @@ function update(dt){
     else if (e.kind === 'bomber'){
       if (!e.primed && dist2(e.x, e.y, player.x, player.y) < 150*150){ e.primed = true; e.atkT = 1.1; }
       if (e.primed){ e.flash = 0.08; e.atkT -= dt; if (e.atkT <= 0){
-        if (dist2(e.x, e.y, player.x, player.y) < 95*95 && player.iframes <= 0 && shieldT <= 0){ player.hp -= 42 * incomingMul; player.iframes = 0.7; shake = Math.max(shake, 12); if (player.hp <= 0) return gameOver(); }
+        if (dist2(e.x, e.y, player.x, player.y) < 95*95 && player.iframes <= 0 && shieldT <= 0){ player.hp -= 42 * incomingMul; player.iframes = 0.7; shake = Math.max(shake, 12); Sound.play('hurt'); Sound.play('wub'); if (player.hp <= 0) return gameOver(); }
         burst(e.x, e.y, '#ff5240', 26); shake = Math.max(shake, 12); e.dead = true;
       } }
     }
@@ -1456,7 +1563,7 @@ function update(dt){
         if (e.attackT <= FIRE){ const target = Math.min(RING, Math.floor((1 - e.attackT / FIRE) * RING));
           while (e.attackFired < target){ const ang = -Math.PI/2 + e.attackFired * (TAU / RING);
             const b = ebullets.get(); b.x = e.x; b.y = e.y; b.vx = Math.cos(ang)*170; b.vy = Math.sin(ang)*170; b.dmg = 12; b.life = 4; e.attackFired++; } }
-      } else { e.megaCD -= dt; if (e.megaCD <= 0){ e.megaCD = e.enraged ? 6 : 9; e.attackT = 1.3; e.attackFired = 0; shake = Math.max(shake, 6); } }
+      } else { e.megaCD -= dt; if (e.megaCD <= 0){ e.megaCD = e.enraged ? 6 : 9; e.attackT = 1.3; e.attackFired = 0; shake = Math.max(shake, 6); Sound.play('telegraph'); } }
     }
   }
 
@@ -1497,7 +1604,7 @@ function update(dt){
       if (!hitBy && !e.dead && !e.hidden && !e.benign && dist2(e.x, e.y, player.x, player.y) < (e.r+player.r)*(e.r+player.r)) hitBy = e;
     });
     if (hitBy){
-      player.hp -= hitBy.dmg * (stormT > 0 ? 2 : 1) * incomingMul; player.iframes = 0.7; shake = Math.max(shake, 8);
+      player.hp -= hitBy.dmg * (stormT > 0 ? 2 : 1) * incomingMul; player.iframes = 0.7; shake = Math.max(shake, 8); Sound.play('hurt'); Sound.play('wub');
       burst(player.x, player.y, '#ffcf4f', 10);
       if (player.hp <= 0) return gameOver();
     }
@@ -1519,7 +1626,7 @@ function update(dt){
   for (let i = 0; i < ebullets.n; i++){
     const b = ebullets.a[i]; b.x += b.vx*dt; b.y += b.vy*dt; b.life -= dt;
     if (b.life > 0 && player.iframes <= 0 && shieldT <= 0 && dist2(b.x, b.y, player.x, player.y) < (player.r+5)*(player.r+5)){
-      player.hp -= b.dmg * incomingMul; player.iframes = 0.6; shake = Math.max(shake, 6); b.life = 0;
+      player.hp -= b.dmg * incomingMul; player.iframes = 0.6; shake = Math.max(shake, 6); b.life = 0; Sound.play('hurt'); Sound.play('wub');
       if (player.hp <= 0) return gameOver();
     }
     if (b.life <= 0){ ebullets.kill(i); i--; }
@@ -1640,9 +1747,9 @@ function draw(){
   for (let i = 0; i < ebullets.n; i++){ const b = ebullets.a[i];
     cx.save(); cx.shadowColor = '#ff6ad5'; cx.shadowBlur = 10; cx.fillStyle = '#ff6ad5';
     cx.beginPath(); cx.arc(b.x, b.y, 4.5, 0, TAU); cx.fill(); cx.restore(); }
-  for (let i = 0; i < booms.n; i++){ const b = booms.a[i]; blit(IMG.roundtrip, b.x, b.y, player.frame*16); }
-  for (let i = 0; i < ctls.n; i++){ const b = ctls.a[i]; blit(IMG.ctl, b.x, b.y, b.facing); }
-  for (let i = 0; i < shots.n; i++){ const b = shots.a[i]; SPRITES.antibody(cx, b.x, b.y, 0, b.facing); }
+  for (let i = 0; i < booms.n; i++){ const b = booms.a[i]; blit(IMG.roundtrip, b.x, b.y, player.frame*16, b.scale || 1); }
+  for (let i = 0; i < ctls.n; i++){ const b = ctls.a[i]; blit(IMG.ctl, b.x, b.y, b.facing, b.scale || 1); }
+  for (let i = 0; i < shots.n; i++){ const b = shots.a[i]; blit(IMG.antibody, b.x, b.y, b.facing, b.scale || 1); }
   const nk = player.weapons.nk;
   if (nk){ const nc = nk.count; for (let i = 0; i < nc; i++) SPRITES.nk(cx, nk.px[i] ?? player.x, nk.py[i] ?? player.y, player.frame + i); }
   const hlp = player.weapons.helper;
@@ -1752,7 +1859,7 @@ function drawHUD(){
 /* ---------- flow ---------- */
 function togglePause(force){ if (state !== 'play' && state !== 'pause') return; state = (force || state === 'play') ? 'pause' : 'play'; if (state === 'play') last = performance.now(); }
 function gameOver(){
-  state = 'over'; const m = (time/60)|0, s = (time%60)|0;
+  state = 'over'; Sound.play('gameover'); const m = (time/60)|0, s = (time%60)|0;
   const mem = Object.keys(memUnlocked).length;
   document.getElementById('stats').textContent =
     'reached wave ' + wave + '  ·  MTTR ' + (m<10?'0':'')+m+':'+(s<10?'0':'')+s + '  ·  model v' + player.level + '  ·  ' + cleared + ' issues resolved  ·  ' + mem + ' resolved permanently';
@@ -1769,13 +1876,13 @@ function openChooser(){
     const t = WTRACKS.find(w => w.key === key);
     const el = document.createElement('div'); el.className = 'card';
     el.innerHTML = '<div class="tag new">Main Weapon</div><h3>' + t.tag + '</h3><p>' + t.acDesc + '</p>';
-    el.onclick = () => { document.getElementById('choose').classList.add('hidden'); restartCore(key); };
+    el.onclick = () => { Sound.play('click'); document.getElementById('choose').classList.add('hidden'); restartCore(key); };
     row.appendChild(el);
   }
   const idle = document.getElementById('seerIdle'); idle.classList.remove('hidden'); const choose = document.getElementById('choose'); choose.insertBefore(idle, choose.firstChild);
   choose.classList.remove('hidden');
 }
-function beginGame(){ document.getElementById('start').classList.add('hidden'); openChooser(); }
+function beginGame(){ Sound.init(); Sound.play('click'); document.getElementById('start').classList.add('hidden'); openChooser(); }
 function restart(){ document.getElementById('gameover').classList.add('hidden'); openChooser(); }
 function restartCore(starter){
   starter = starter || lastStarter; lastStarter = starter;
@@ -1783,13 +1890,22 @@ function restartCore(starter){
   ctls.clear(); pulses.clear(); nets.clear(); lobs.clear(); ebullets.clear(); booms.clear();
   time = 0; cleared = 0; shake = 0;
   feverT = shieldT = opsoninT = stormT = cyto = autoimmune = hasteT = regenT = flashT = 0; armInnate = armAdaptive = 0; banners = [];
-  wave = 0; waveState = 'break'; bossRef = null; revealT = 0; pendingLevels = 0; banished.clear(); masteredOnce = [false, false, false]; boltT = 0;
+  wave = 0; waveState = 'break'; bossRef = null; revealT = 0; pendingLevels = 0; banished.clear(); masteredOnce = [false, false, false]; boltT = 0; Sound.setBoss(false);
   for (const k in memKills) delete memKills[k]; for (const k in memUnlocked) delete memUnlocked[k];
   resetPlayer();
   player.weapons[starter] = WTRACKS.find(w => w.key === starter).acquire();
   initRBC(); startWave(1); state = 'play'; last = performance.now();
 }
 document.getElementById('startBtn').onclick = beginGame;
+// audio: init on first interaction; M or the speaker button toggles mute
+['pointerdown', 'keydown'].forEach(ev => addEventListener(ev, () => Sound.init(), { once: true }));
+(function(){
+  const btn = document.getElementById('muteBtn');
+  function refresh(){ if (btn) btn.textContent = Sound.muted() ? '\uD83D\uDD07' : '\uD83D\uDD0A'; }
+  if (btn) btn.onclick = () => { Sound.init(); Sound.toggle(); refresh(); };
+  addEventListener('keydown', e => { if (e.key === 'm' || e.key === 'M'){ Sound.init(); Sound.toggle(); refresh(); } });
+  refresh();
+})();
 // idle-Seer iris follows the mouse on the start screen (reflection mirrors vertically)
 (function(){
   const si = document.getElementById('seerIris'), ri = document.getElementById('reflIris'), box = document.getElementById('seerIdle');
