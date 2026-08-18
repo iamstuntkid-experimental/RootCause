@@ -702,7 +702,7 @@ function resolveAgents(x, y, r){   // push an entity out of any solid agent it o
   return [x, y];
 }
 function goRogue(e){
-  e.benign = false; e.dmg = EN.agent.dmg * (1 + 0.08 * (e.grow || 0)); e.emitT = 1.0;
+  e.benign = false; e.dmg = EN.agent.dmg * (1 + 0.08 * (e.grow || 0)); e.emitT = 1.0; e.emitN = 0;
   e.vx *= 0.3; e.vy *= 0.3; e.flash = 0.12; shake = Math.max(shake, 5);
   banners.push({ text: 'AGENT WENT ROGUE', sub: 'it is shipping broken code — kill it fast', life: 1.8, color: '#ee4d9b' });
 }
@@ -741,7 +741,7 @@ function agentMove(e, dt){
     let tg = null, td = Infinity;
     for (let i = 0; i < antigens.n; i++){ const g = antigens.a[i]; const dd = dist2(g.x, g.y, e.x, e.y); if (dd < td){ td = dd; tg = g; } }
     if (tg && td < (e.r + 14)*(e.r + 14)){ for (let i = 0; i < antigens.n; i++){ if (antigens.a[i] === tg){ antigens.kill(i); break; } } feedAgent(e); }
-    e.emitT -= dt; if (e.emitT <= 0){ e.emitT = 2.2; if (pathos.n < MAX_PATHO) spawnPatho('bacterium', e.x, e.y); burst(e.x, e.y, '#ee4d9b', 5); }
+    e.emitT -= dt; if (e.emitT <= 0 && e.emitN < 10){ e.emitT = 4.4; if (pathos.n < MAX_PATHO) spawnPatho('bacterium', e.x, e.y); e.emitN++; burst(e.x, e.y, '#ee4d9b', 5); }
     const far = Math.hypot(W, H) * 0.7;
     if (dist2(e.x, e.y, player.x, player.y) > far*far){ const a = Math.atan2(player.y - e.y, player.x - e.x); e.vx += Math.cos(a)*e.speed*4*dt; e.vy += Math.sin(a)*e.speed*4*dt; }
   }
