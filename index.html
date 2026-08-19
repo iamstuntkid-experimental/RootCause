@@ -265,7 +265,7 @@ function createMusicEngine() {
     level: 1, mode: 'waves', vibe: 'epic', seed: 7,
     auto: true, variety: 100, pressure: 0.30,
     crush: 60,
-    padWave: 'saw', padVar: 100, padVol: 70, reverb: 35,
+    padWave: 'saw', padVar: 100, padVol: 70, reverb: 60, tempoMul: 1,
     bassOn: true, groove: 0, bassWave: 'saw', bassVol: 25,
     drumsOn: true, drive: 65, drumVol: 50, master: 78,
   };
@@ -275,19 +275,26 @@ function createMusicEngine() {
   const m2f = m => 440 * Math.pow(2, (m-69)/12);
   function tempo() {
     const cfg = MODE_CONFIG[s.mode];
-    if (cfg && cfg.tempo != null) return cfg.tempo;   // death/menu fixed tempo
+    const mul = s.tempoMul || 1;
+    if (cfg && cfg.tempo != null) return cfg.tempo * mul;   // death/menu fixed tempo
     const base = 116 + (s.level-1)*3;
-    return s.mode==='boss' ? base+14 : base;
+    return (s.mode==='boss' ? base+14 : base) * mul;
   }
   function effIntensity() { return Math.min(1, s.drive/100 + s.pressure*0.35); }
   // epic pushes registers apart: bass lower than chill, but not so low it clips/muds.
   function bassOctave() { return s.vibe==='epic' ? 31 : 36; }
-  function padBase() { return s.vibe==='epic' ? 48 : 48; }
+  function padBase() { return s.vibe==='epic' ? 36 : 36; }
 
   function reverbIR(sec, decay) {
     const rate=ctx.sampleRate, len=Math.floor(rate*sec), buf=ctx.createBuffer(2,len,rate);
-    for(let c=0;c<2;c++){ const d=buf.getChannelData(c);
-      for(let i=0;i<len;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/len,decay); }
+    for(let c=0;c<2;c++){ const d=buf.getChannelData(c); let lp=0;
+      for(let i=0;i<len;i++){
+        const t=i/len;
+        const env=Math.pow(1-t, decay) * (1 - Math.exp(-i/(rate*0.03)));   // smooth onset, long exp tail
+        let x=(Math.random()*2-1)*env;
+        lp += (x - lp) * (0.16 + 0.10*c);                                  // darken the tail (per-channel spread)
+        d[i]=lp*3.2;
+      } }
     return buf;
   }
   let pulseWave = null;
@@ -317,16 +324,17 @@ function createMusicEngine() {
     duckGain = ctx.createGain(); duckGain.gain.value = 1;
     master.connect(duckGain); duckGain.connect(ctx.destination);
     analyser = ctx.createAnalyser(); analyser.fftSize = 2048; duckGain.connect(analyser);
-    convolver = ctx.createConvolver(); convolver.buffer = reverbIR(2.2, 3);
+    convolver = ctx.createConvolver(); convolver.buffer = reverbIR(7.0, 2.0);
     wet = ctx.createGain(); dry = ctx.createGain();
     convolver.connect(wet); wet.connect(master); dry.connect(master); setReverb(s.reverb);
-    padGain = ctx.createGain(); padGain.gain.value = s.padVol/100*1.0; padGain.connect(dry); padGain.connect(convolver);
+    padGain = ctx.createGain(); padGain.gain.value = s.padVol/100*1.0; padGain.connect(dry);
+    const padVerb = ctx.createGain(); padVerb.gain.value = 1.6; padGain.connect(padVerb); padVerb.connect(convolver);
     bassGain = ctx.createGain(); bassGain.gain.value = s.bassVol/100*0.5; bassGain.connect(dry);
     drumBus = ctx.createGain(); drumBus.gain.value = s.drumVol/100;
     drumBus.connect(dry); drumBus.connect(convolver);   // bit-crusher removed per design
     drumGain = drumBus;
   }
-  function setReverb(v){ if(!ctx) return; wet.gain.value=(v/100)*0.55; dry.gain.value=1-(v/100)*0.3; }
+  function setReverb(v){ if(!ctx) return; wet.gain.value=(v/100)*0.95; dry.gain.value=1-(v/100)*0.45; }
 
   function duck(amount, holdMs) {
     if (!ctx) return;
@@ -642,6 +650,210 @@ function createMusicEngine() {
     getAnalyser: () => analyser, isPlaying: () => playing };
 }
 
+// Liminal — ambient ominous drone engine (standalone module)
+// Long sustained drones, slow filter movement, no drums or rhythm. Fully
+// synthesized with the Web Audio API — no audio files.
+//
+// Default scene: "pool" (wet, echoing, still) with deep reverb.
+//
+// Usage:
+//   import { createDroneEngine } from "./drone-engine.js";
+//   const drone = createDroneEngine();
+//   // call drone.enter() from inside a user-gesture handler (click / keydown)
+//   drone.setScene("atrium"|"subfloor"|"pool"|"signal"|"dusk");
+//   drone.leave();  // stop
+//
+// If you are NOT using ES modules, delete the word "export" on the next code line
+// and load with a plain <script> tag; then call createDroneEngine() globally.
+
+function createDroneEngine() {
+  let ctx, master, wet, dry, convolver, analyser, limiter;
+  let running = false, timer = null, step = 0;
+  let onStep = null;
+
+  const s = {
+    scene: 'pool',
+    drift: 18,        // seconds per tone (higher = shifts more often; slider inverted in UI)
+    sweep: 40,        // filter motion depth 0-100
+    diss: 30,         // dissonance / upper-voice amount 0-100
+    rev: 90,          // reverb 0-100
+    vol: 72,          // master 0-100
+  };
+
+  // ---- scenes: each is a set of root notes (MIDI) the drone slowly wanders,
+  // a base filter color, and character flags. No rhythm anywhere. ----
+  const SCENES = {
+    atrium:  { name: 'Atrium',  roots: [26, 26, 24, 27], color: 300, spread: 'wide',  desc: 'vast, empty, waiting' },
+    subfloor:{ name: 'Subfloor',roots: [22, 22, 23, 22], color: 190, spread: 'tight', desc: 'low, close, pressing in' },
+    pool:    { name: 'Pool',    roots: [29, 31, 29, 28], color: 520, spread: 'wide',  desc: 'wet, echoing, still' },
+    signal:  { name: 'Signal',  roots: [26, 27, 33, 26], color: 700, spread: 'thin',  desc: 'something almost transmitting' },
+    dusk:    { name: 'Dusk',    roots: [21, 21, 21, 20], color: 240, spread: 'tight', desc: 'the last light, fading' },
+  };
+
+  const m2f = m => 440 * Math.pow(2, (m - 69) / 12);
+  const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
+
+  // simple seeded-ish randomness that still feels organic across a session
+  function rnd() { return Math.random(); }
+
+  function reverbIR(seconds, decay) {
+    const rate = ctx.sampleRate, len = rate * seconds;
+    const buf = ctx.createBuffer(2, len, rate);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = buf.getChannelData(ch);
+      for (let i = 0; i < len; i++) {
+        // dark, smooth tail
+        d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+      }
+    }
+    return buf;
+  }
+
+  function init() {
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    master = ctx.createGain(); master.gain.value = s.vol / 100 * 0.7;
+    limiter = ctx.createDynamicsCompressor();
+    limiter.threshold.value = -8; limiter.ratio.value = 12; limiter.attack.value = 0.02; limiter.release.value = 0.4;
+    convolver = ctx.createConvolver(); convolver.buffer = reverbIR(5.5, 2.2);
+    wet = ctx.createGain(); dry = ctx.createGain();
+    setReverb(s.rev);
+    convolver.connect(wet); wet.connect(master); dry.connect(master);
+    master.connect(limiter);
+    analyser = ctx.createAnalyser(); analyser.fftSize = 2048;
+    limiter.connect(analyser); analyser.connect(ctx.destination);
+  }
+
+  function setReverb(v) { if (!ctx) return; wet.gain.value = (v/100) * 0.9; dry.gain.value = 1 - (v/100) * 0.4; }
+
+  // ---- the core voice: a single long tone made of layered detuned oscillators
+  // with independent slow filter movement, long fade in/out for seamless overlap ----
+  function droneTone(rootMidi, t, dur) {
+    const sc = SCENES[s.scene];
+    const sweepDepth = s.sweep / 100;
+    const spread = sc.spread;
+
+    // layer set depends on scene "spread"
+    const layers = [];
+    // root
+    layers.push({ midi: rootMidi, type: 'sawtooth', detune: 0, gain: 1.0 });
+    layers.push({ midi: rootMidi, type: 'sawtooth', detune: 7, gain: 0.9 });   // beating pair
+    // sub for weight
+    layers.push({ midi: rootMidi - 12, type: 'sine', detune: 0, gain: 0.8 });
+    // a fifth above, quieter, for openness (wide) or omitted (tight)
+    if (spread === 'wide' || spread === 'thin') layers.push({ midi: rootMidi + 7, type: 'sawtooth', detune: -5, gain: 0.35 });
+    // dissonant upper voice — amount driven by "unease"
+    const diss = s.diss / 100;
+    if (diss > 0.05) {
+      // minor 2nd or tritone above, very quiet, wavering
+      const interval = diss > 0.6 ? 6 : 13; // tritone when high, b9 otherwise
+      layers.push({ midi: rootMidi + interval, type: 'triangle', detune: 9, gain: 0.14 * diss, waver: true });
+    }
+    if (spread === 'thin') layers.push({ midi: rootMidi + 19, type: 'sine', detune: 3, gain: 0.10, waver: true });
+
+    const busGain = ctx.createGain();
+    const peak = 0.16;
+    const floor = peak * 0.62;                 // never drops to silence between tones
+    const atk = dur * 0.3, rel = dur * 0.32;
+    busGain.gain.setValueAtTime(floor, t);
+    busGain.gain.linearRampToValueAtTime(peak, t + atk);
+    busGain.gain.setValueAtTime(peak, t + dur - rel);
+    busGain.gain.linearRampToValueAtTime(floor, t + dur);
+
+    // heavy reverb send + dry body
+    const revSend = ctx.createGain(); revSend.gain.value = 1.8;
+    busGain.connect(dry); busGain.connect(revSend); revSend.connect(convolver);
+
+    layers.forEach(L => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      const lp = ctx.createBiquadFilter();
+      o.type = L.type;
+      o.frequency.value = m2f(L.midi);
+      o.detune.value = L.detune;
+      lp.type = 'lowpass'; lp.Q.value = spread === 'thin' ? 4 : 2;
+
+      // base cutoff from scene color, plus slow independent sweep
+      const baseCut = sc.color * (0.7 + rnd() * 0.6);
+      const swAmt = baseCut * 0.9 * sweepDepth;
+      const phase = rnd();
+      // sweep across the whole tone, each layer at its own rate/direction
+      const up = rnd() > 0.5;
+      const mid = dur * (0.4 + rnd() * 0.3);
+      lp.frequency.setValueAtTime(clamp(baseCut - (up?swAmt:-swAmt)*0.5, 90, 6000), t);
+      lp.frequency.linearRampToValueAtTime(clamp(baseCut + (up?swAmt:-swAmt), 90, 6000), t + mid);
+      lp.frequency.linearRampToValueAtTime(clamp(baseCut - (up?swAmt:-swAmt)*0.3, 90, 6000), t + dur);
+
+      g.gain.value = L.gain;
+
+      // wavering voices get a slow LFO on gain for an unsettled, breathing quality
+      if (L.waver) {
+        const lfo = ctx.createOscillator(), lfoG = ctx.createGain();
+        lfo.type = 'sine'; lfo.frequency.value = 0.05 + rnd() * 0.08;
+        lfoG.gain.value = L.gain * 0.6;
+        lfo.connect(lfoG); lfoG.connect(g.gain);
+        lfo.start(t); lfo.stop(t + dur + 0.2);
+      }
+
+      o.connect(lp); lp.connect(g); g.connect(busGain);
+      o.start(t); o.stop(t + dur + 0.2);
+    });
+  }
+
+  // occasional slow swell — a distant, rising-then-falling tone that passes through
+  function swell(rootMidi, t, dur) {
+    const o = ctx.createOscillator(), g = ctx.createGain(), lp = ctx.createBiquadFilter();
+    o.type = 'sawtooth'; o.frequency.value = m2f(rootMidi + 12);
+    lp.type = 'lowpass'; lp.frequency.setValueAtTime(200, t);
+    lp.frequency.linearRampToValueAtTime(900, t + dur * 0.5);
+    lp.frequency.linearRampToValueAtTime(200, t + dur);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(0.05, t + dur * 0.5);
+    g.gain.linearRampToValueAtTime(0.0001, t + dur);
+    const revSend = ctx.createGain(); revSend.gain.value = 2.4;
+    o.connect(lp); lp.connect(g); g.connect(revSend); revSend.connect(convolver); g.connect(dry);
+    o.start(t); o.stop(t + dur + 0.3);
+  }
+
+  function toneDur() { return s.drift; }  // seconds per tone
+
+  function scheduleNext() {
+    if (!running) return;
+    const sc = SCENES[s.scene];
+    const dur = toneDur();
+    const root = sc.roots[step % sc.roots.length];
+    const t = ctx.currentTime + 0.1;
+    // overlap tones by ~40% for a seamless drift
+    droneTone(root, t, dur * 1.4);
+    // rare swell passing through (more likely with higher unease)
+    if (rnd() < 0.18 + (s.diss/100) * 0.25) swell(root, t + dur * 0.3, dur * 1.1);
+    if (onStep) onStep(step, sc);
+    step++;
+    timer = setTimeout(scheduleNext, dur * 1000);
+  }
+
+  function enter() {
+    if (!ctx) init();
+    if (ctx.state === 'suspended') ctx.resume();
+    if (running) return;
+    running = true; step = 0; scheduleNext();
+  }
+  function leave() { running = false; clearTimeout(timer); }
+
+  function set(k, v) {
+    s[k] = v; if (!ctx) return;
+    if (k === 'vol') master.gain.setTargetAtTime(v/100 * 0.7, ctx.currentTime, 0.1);
+    if (k === 'rev') setReverb(v);
+  }
+  function setScene(name) { if (SCENES[name]) { s.scene = name; step = 0; } }
+
+  return {
+    enter, leave, set, setScene,
+    settings: s, SCENES,
+    getAnalyser: () => analyser, isRunning: () => running,
+    setStepCallback: fn => { onStep = fn; },
+  };
+}
+
 'use strict';
 /* ===========================================================================
    RED TIDE — immune-system survivors
@@ -764,18 +976,28 @@ let revealT = 0, agentClock = 6, incomingMul = 1;
 let masteredOnce = [false, false, false];
 let waveTotal = 1, waveResolved = 0;
 const musicEngine = (typeof createMusicEngine === 'function') ? createMusicEngine() : null;
-let musFreq = null;
-const AUDIO = { sfx: 80, drone: 40, music: 20 };
+const droneEngine = (typeof createDroneEngine === 'function') ? createDroneEngine() : null;
+const DRONE_SCENE = 'signal';   // menu/loadout ambience (atrium|subfloor|pool|signal|dusk)
+let musFreq = null, drnFreq = null;
+const AUDIO = { sfx: 80, drone: 15, music: 10, musicSlow: 6, musicReverb: 0 };
 function applyAudio(k){ Sound.init();
   if (k === 'sfx') Sound.setSfx(AUDIO.sfx/100 * 1.2);
-  else if (k === 'drone'){ if (musicEngine && state === 'menu') musicEngine.set('master', AUDIO.drone); }
-  else if (k === 'music' && musicEngine) musicEngine.set('master', (bossRef && !bossRef.dead) ? 40 : AUDIO.music); }
-function musicApplyState(){   // start music (if unmuted) in the right mode for the current screen
-  if (!musicEngine || Sound.muted()) return;
-  if (state === 'over'){ musicEngine.setMode('death'); musicEngine.set('master', AUDIO.music); }
-  else if (state === 'play' || state === 'pause'){ if (bossRef && !bossRef.dead){ musicEngine.setMode('boss'); musicEngine.set('master', 40); } else { musicEngine.setMode('waves'); musicEngine.set('master', AUDIO.music); } }
-  else { musicEngine.setMode('drone'); musicEngine.set('master', AUDIO.drone); }
-  if (!musicEngine.isPlaying()) musicEngine.start(); }
+  else if (k === 'drone'){ if (droneEngine) droneEngine.set('vol', AUDIO.drone); }
+  else if (k === 'music' && musicEngine) musicEngine.set('master', (bossRef && !bossRef.dead) ? 40 : AUDIO.music);
+  else if (k === 'musicSlow'){ if (musicEngine) musicEngine.set('tempoMul', 1 - AUDIO.musicSlow/100 * 0.5); }
+  else if (k === 'musicReverb'){ if (musicEngine) musicEngine.set('reverb', AUDIO.musicReverb); } }
+function musicApplyState(){   // hand off between the drone engine (menus) and arcade engine (play/death)
+  if (Sound.muted()){ if (musicEngine) musicEngine.stop(); if (droneEngine) droneEngine.leave(); return; }
+  if (state === 'menu'){
+    if (musicEngine) musicEngine.stop();
+    if (droneEngine){ droneEngine.setScene(DRONE_SCENE); droneEngine.set('vol', AUDIO.drone); droneEngine.enter(); }
+  } else if (state === 'over'){
+    if (droneEngine) droneEngine.leave();
+    if (musicEngine){ musicEngine.setMode('death'); musicEngine.set('master', AUDIO.music); if (!musicEngine.isPlaying()) musicEngine.start(); }
+  } else {   // play / pause
+    if (droneEngine) droneEngine.leave();
+    if (musicEngine){ if (bossRef && !bossRef.dead){ musicEngine.setMode('boss'); musicEngine.set('master', 40); } else { musicEngine.setMode('waves'); musicEngine.set('master', AUDIO.music); } if (!musicEngine.isPlaying()) musicEngine.start(); }
+  } }
 let vizTop = null, vizBot = null;   // smoothed visualizer bar heights
 const TUNE = { xp:0.80, playerDmg:1.05, enemyHp:1.25, heal:0.45, pickupRate:0.85, techDebt:0.090, spawn:1.00, speed:1.00 };
 
@@ -2327,13 +2549,15 @@ function vizColor(t){ t = clamp(t,0,1); const f = t*(VIZ_RGB.length-1), i = f|0,
 const RB = (px, w) => (w||400) + ' ' + px + "px Rubik, 'Trebuchet MS', sans-serif";
 function drawViz(top){
   const spec = Sound.spectrum();
-  let mus = null;
+  let mus = null, drn = null;
   if (musicEngine){ const ma = musicEngine.getAnalyser(); if (ma){ if (!musFreq || musFreq.length !== ma.frequencyBinCount) musFreq = new Uint8Array(ma.frequencyBinCount); ma.getByteFrequencyData(musFreq); mus = musFreq; } }
+  if (droneEngine && droneEngine.isRunning()){ const da = droneEngine.getAnalyser(); if (da){ if (!drnFreq || drnFreq.length !== da.frequencyBinCount) drnFreq = new Uint8Array(da.frequencyBinCount); da.getByteFrequencyData(drnFreq); drn = drnFreq; } }
   const N = 60; if (!vizTop){ vizTop = new Float32Array(N); vizBot = new Float32Array(N); }
   const arr = top ? vizTop : vizBot, bins = 96, maxH = 74;
   for (let i = 0; i < N; i++){ let tg = 0;
     if (spec){ tg += spec[(i/N*bins)|0]/255; }
     if (mus){ tg += mus[(i/N*(mus.length*0.28))|0]/255 * 1.1; }
+    if (drn){ tg += drn[(i/N*(drn.length*0.2))|0]/255 * 1.2; }
     arr[i] += (Math.min(1, tg) - arr[i]) * 0.28; }
   const pad = 22, step = (W - pad*2)/N, barW = step*0.62;
   const baseTop = 44, baseBot = H - 152, by = top ? baseTop : baseBot;
@@ -2432,7 +2656,7 @@ function drawHUD(){
 function togglePause(force){ if (state !== 'play' && state !== 'pause') return; state = (force || state === 'play') ? 'pause' : 'play'; if (state === 'play') last = performance.now();
   if (musicEngine && !Sound.muted()){ state === 'pause' ? musicEngine.stop() : musicApplyState(); } }
 function gameOver(){
-  state = 'over'; Sound.play('gameover'); if (musicEngine){ musicEngine.setMode('death'); musicEngine.set('master', AUDIO.music); } const m = (time/60)|0, s = (time%60)|0;
+  state = 'over'; Sound.play('gameover'); musicApplyState(); const m = (time/60)|0, s = (time%60)|0;
   const mem = Object.keys(memUnlocked).length;
   document.getElementById('stats').textContent =
     'reached wave ' + wave + '  ·  MTTR ' + (m<10?'0':'')+m+':'+(s<10?'0':'')+s + '  ·  model v' + player.level + '  ·  ' + cleared + ' issues resolved  ·  ' + mem + ' resolved permanently';
@@ -2441,7 +2665,7 @@ function gameOver(){
 const STARTERS = ['antibody', 'deploy', 'ctl', 'roundtrip'];
 let lastStarter = 'antibody';
 function openChooser(){
-  if (musicEngine){ musicEngine.setMode('drone'); musicEngine.set('master', AUDIO.drone); if (!musicEngine.isPlaying()) musicEngine.start(); }
+  musicApplyState();
   state = 'menu';
   const row = document.getElementById('cards2'); row.innerHTML = '';
   const poolK = STARTERS.slice(), picks = [];
@@ -2456,7 +2680,7 @@ function openChooser(){
   const idle = document.getElementById('seerIdle'); idle.classList.remove('hidden'); const choose = document.getElementById('choose'); choose.insertBefore(idle, choose.firstChild);
   choose.classList.remove('hidden');
 }
-function beginGame(){ Sound.init(); Sound.play('click'); applyAudio('sfx'); applyAudio('drone'); applyAudio('music'); if (musicEngine){ musicEngine.setMode('drone'); musicEngine.set('master', AUDIO.drone); musicEngine.start(); } document.getElementById('start').classList.add('hidden'); openChooser(); }
+function beginGame(){ Sound.init(); Sound.play('click'); applyAudio('sfx'); applyAudio('drone'); applyAudio('music'); applyAudio('musicSlow'); applyAudio('musicReverb'); document.getElementById('start').classList.add('hidden'); openChooser(); }
 function restart(){ document.getElementById('gameover').classList.add('hidden'); openChooser(); }
 function restartCore(starter){
   starter = starter || lastStarter; lastStarter = starter;
@@ -2468,8 +2692,8 @@ function restartCore(starter){
   for (const k in memKills) delete memKills[k]; for (const k in memUnlocked) delete memUnlocked[k];
   resetPlayer();
   player.weapons[starter] = WTRACKS.find(w => w.key === starter).acquire();
-  if (musicEngine){ musicEngine.set('master', AUDIO.music); musicEngine.setSeed(1); musicEngine.setLevel(1); musicEngine.setMode('waves'); musicEngine.start(); }
-  initRBC(); startWave(1); state = 'play'; last = performance.now();
+  if (musicEngine){ musicEngine.setSeed(1); musicEngine.setLevel(1); }
+  initRBC(); startWave(1); state = 'play'; last = performance.now(); musicApplyState();
 }
 document.getElementById('startBtn').onclick = beginGame;
 // audio: init on first interaction; M or the speaker button toggles mute
@@ -2520,7 +2744,7 @@ document.getElementById('startBtn').onclick = beginGame;
     row.appendChild(lab); row.appendChild(inp); panel.appendChild(row);
   }
   const ah = document.createElement('h4'); ah.textContent = 'Audio'; ah.style.marginTop = '12px'; panel.appendChild(ah);
-  for (const [key, label] of [['sfx','SFX volume'],['drone','Drone volume'],['music','Music volume']]){
+  for (const [key, label] of [['sfx','SFX volume'],['drone','Drone volume'],['music','Music volume'],['musicSlow','Music slow'],['musicReverb','Music reverb']]){
     const row = document.createElement('div'); row.className = 'row';
     const lab = document.createElement('label'); const b = document.createElement('b'); b.textContent = AUDIO[key]; lab.textContent = label; lab.appendChild(b);
     const inp = document.createElement('input'); inp.type = 'range'; inp.min = 0; inp.max = 100; inp.step = 1; inp.value = AUDIO[key];
@@ -2529,7 +2753,7 @@ document.getElementById('startBtn').onclick = beginGame;
   }
   const copy = document.createElement('div'); copy.className = 'copy'; panel.appendChild(copy);
   const hint = document.createElement('div'); hint.className = 'hint'; hint.textContent = 'select the line above to copy your settings'; panel.appendChild(hint);
-  function updateCopy(){ copy.textContent = cfg.map(([k]) => k + '=' + fmt(k, TUNE[k])).join('  ') + '  sfx=' + AUDIO.sfx + '  drone=' + AUDIO.drone + '  music=' + AUDIO.music; }
+  function updateCopy(){ copy.textContent = cfg.map(([k]) => k + '=' + fmt(k, TUNE[k])).join('  ') + '  sfx=' + AUDIO.sfx + '  drone=' + AUDIO.drone + '  music=' + AUDIO.music + '  musicSlow=' + AUDIO.musicSlow + '  musicReverb=' + AUDIO.musicReverb; }
   updateCopy();
   addEventListener('keydown', e => { if (e.key === '`'){ panel.classList.toggle('hidden'); } });
 })();
