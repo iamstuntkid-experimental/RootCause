@@ -35,10 +35,17 @@ function isIntegerInRange(value: unknown, min: number, max: number): value is nu
 http.route({
   path: "/api/scoreboard",
   method: "GET",
-  handler: httpAction(async (ctx) => {
-    const scores = await ctx.runQuery(internal.scoreboard.listScores, {});
+  handler: httpAction(async (ctx, request) => {
+    const cursor = new URL(request.url).searchParams.get("cursor");
+    const result = await ctx.runQuery(internal.scoreboard.listScores, {
+      paginationOpts: { cursor, numItems: 100 },
+    });
     return json(
-      { scores },
+      {
+        scores: result.page,
+        continueCursor: result.continueCursor,
+        isDone: result.isDone,
+      },
       200,
       { "Cache-Control": "public, max-age=15, stale-while-revalidate=30" },
     );

@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { paginationOptsValidator } from "convex/server";
 import { internalMutation, internalQuery } from "./_generated/server";
 
 const RUN_TTL_MS = 24 * 60 * 60 * 1000;
@@ -103,21 +104,24 @@ export const submitScore = internalMutation({
 });
 
 export const listScores = internalQuery({
-  args: {},
-  handler: async (ctx) => {
-    const rows = await ctx.db
+  args: { paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
+    const result = await ctx.db
       .query("scores")
       .withIndex("by_score_and_wave_and_durationSeconds")
       .order("desc")
-      .take(25);
+      .paginate(args.paginationOpts);
 
-    return rows.map((row) => ({
-      username: row.username,
-      score: row.score,
-      wave: row.wave,
-      level: row.level,
-      durationSeconds: row.durationSeconds,
-      submittedAt: row.submittedAt,
-    }));
+    return {
+      ...result,
+      page: result.page.map((row) => ({
+        username: row.username,
+        score: row.score,
+        wave: row.wave,
+        level: row.level,
+        durationSeconds: row.durationSeconds,
+        submittedAt: row.submittedAt,
+      })),
+    };
   },
 });

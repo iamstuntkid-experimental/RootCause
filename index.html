@@ -87,15 +87,16 @@
   .score-status.success{color:var(--green)}
   .gameover-actions{display:flex;gap:.7rem;align-items:center;justify-content:center;flex-wrap:wrap}
   .gameover-actions .btn{margin-top:1.2rem}
-  #leaderboard{z-index:50;overflow:auto;padding:2rem 1rem}
-  .board-shell{width:min(94vw,760px);margin:auto;background:rgba(10,7,18,.97);border:1px solid #33265a;border-radius:8px;padding:clamp(1rem,4vw,2rem);box-shadow:0 0 50px rgba(109,74,202,.22)}
-  .board-head{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;margin-bottom:1.25rem}
+  #leaderboard{z-index:50;justify-content:flex-start;overflow:hidden;padding:clamp(.75rem,2vw,2rem) 1rem}
+  .board-shell{width:min(94vw,760px);height:100%;min-height:0;margin:0;background:rgba(10,7,18,.97);border:1px solid #33265a;border-radius:8px;padding:clamp(1rem,4vw,2rem);box-shadow:0 0 50px rgba(109,74,202,.22);display:flex;flex-direction:column;overflow:hidden}
+  .board-head{display:flex;flex:0 0 auto;align-items:flex-start;justify-content:space-between;gap:1rem;margin-bottom:1.25rem}
   .board-head h1{font-size:clamp(1.45rem,5vw,2.6rem)}
-  .icon-btn{width:36px;height:36px;flex:0 0 auto;border:1px solid #33265a;border-radius:4px;background:transparent;color:var(--bone);font:inherit;cursor:pointer}
+  .icon-btn{width:auto;min-width:36px;height:36px;flex:0 0 auto;padding:0 .8rem;border:1px solid #33265a;border-radius:4px;background:transparent;color:var(--bone);font:inherit;cursor:pointer;white-space:nowrap}
   .icon-btn:hover,.icon-btn:focus-visible{border-color:var(--violet);outline:none}
+  .board-scroll{min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
   .board-table{width:100%;border-collapse:collapse;font-size:clamp(.68rem,2vw,.86rem)}
   .board-table th,.board-table td{padding:.72rem .55rem;border-bottom:1px solid #251a3d;text-align:left}
-  .board-table th{color:var(--muted);font-size:.62rem;letter-spacing:.13em;text-transform:uppercase;font-weight:400}
+  .board-table th{position:sticky;top:0;z-index:1;background:#0a0712;color:var(--muted);font-size:.62rem;letter-spacing:.13em;text-transform:uppercase;font-weight:400}
   .board-table td:first-child{width:3rem;color:var(--muted)}
   .board-table td:nth-child(3){color:var(--event);font-weight:700}
   .board-table tbody tr:first-child td{color:var(--event)}
@@ -181,13 +182,15 @@
         <h1 id="leaderboardTitle">Incident <span class="c">Leaderboard</span></h1>
         <div class="sub">most issues resolved before production went down</div>
       </div>
-      <button class="icon-btn" id="closeLeaderboardBtn" aria-label="Close leaderboard">×</button>
+      <button class="icon-btn" id="closeLeaderboardBtn" aria-label="Back to main menu">← Back</button>
     </div>
-    <table class="board-table">
-      <thead><tr><th>Rank</th><th>Player</th><th>Score</th><th>Wave</th><th>MTTR</th></tr></thead>
-      <tbody id="leaderboardBody"></tbody>
-    </table>
-    <div id="leaderboardStatus" class="board-empty" role="status" aria-live="polite">Loading incidents…</div>
+    <div id="leaderboardScroll" class="board-scroll">
+      <table class="board-table">
+        <thead><tr><th>Rank</th><th>Player</th><th>Score</th><th>Wave</th><th>MTTR</th></tr></thead>
+        <tbody id="leaderboardBody"></tbody>
+      </table>
+      <div id="leaderboardStatus" class="board-empty" role="status" aria-live="polite">Loading incidents…</div>
+    </div>
   </div>
 </div>
 
@@ -985,7 +988,19 @@ const Scoreboard = (() => {
     return data;
   }
 
-  async function list(){ return (await request('/api/scoreboard', { method: 'GET' })).scores || []; }
+  async function list(){
+    const scores = [];
+    let cursor = '';
+    let isDone = false;
+    while (!isDone){
+      const query = cursor ? '?cursor=' + encodeURIComponent(cursor) : '';
+      const result = await request('/api/scoreboard' + query, { method: 'GET' });
+      scores.push(...(result.scores || []));
+      cursor = result.continueCursor || '';
+      isDone = Boolean(result.isDone) || !cursor;
+    }
+    return scores;
+  }
   function previous(){ try { return JSON.parse(localStorage.getItem(submissionKey) || 'null'); } catch { return null; } }
 
   return { configured: () => Boolean(apiUrl), startRun, submit, list, previous };
@@ -2911,10 +2926,11 @@ function formatScoreTime(total){
 async function openLeaderboard(event){
   leaderboardReturnFocus = event && event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
   const overlay = document.getElementById('leaderboard');
+  const scroll = document.getElementById('leaderboardScroll');
   const body = document.getElementById('leaderboardBody');
   const status = document.getElementById('leaderboardStatus');
   body.innerHTML = ''; status.hidden = false; status.textContent = Scoreboard.configured() ? 'Loading incidents…' : 'Leaderboard backend awaiting deployment.';
-  overlay.classList.remove('hidden'); document.getElementById('closeLeaderboardBtn').focus();
+  overlay.classList.remove('hidden'); scroll.scrollTop = 0; document.getElementById('closeLeaderboardBtn').focus();
   if (!Scoreboard.configured()) return;
   try {
     const scores = await Scoreboard.list();
@@ -2925,6 +2941,7 @@ async function openLeaderboard(event){
       for (const value of cells){ const cell = document.createElement('td'); cell.textContent = value; row.appendChild(cell); }
       body.appendChild(row);
     }
+    scroll.scrollTop = 0;
     status.hidden = true;
   } catch (error) { status.textContent = error.message || 'Could not load the leaderboard.'; }
 }
