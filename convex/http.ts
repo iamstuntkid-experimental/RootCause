@@ -28,26 +28,25 @@ function options() {
   return new Response(null, { status: 204, headers: corsHeaders });
 }
 
-function isIntegerInRange(value: unknown, min: number, max: number): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max;
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
 http.route({
   path: "/api/scoreboard",
   method: "GET",
   handler: httpAction(async (ctx, request) => {
-    const cursor = new URL(request.url).searchParams.get("cursor");
+    const requestedBrowserId = new URL(request.url).searchParams.get("browserId");
+    const browserId = requestedBrowserId && BROWSER_ID_RE.test(requestedBrowserId)
+      ? requestedBrowserId
+      : undefined;
     const result = await ctx.runQuery(internal.scoreboard.listScores, {
-      paginationOpts: { cursor, numItems: 100 },
+      browserId,
     });
     return json(
-      {
-        scores: result.page,
-        continueCursor: result.continueCursor,
-        isDone: result.isDone,
-      },
+      result,
       200,
-      { "Cache-Control": "public, max-age=15, stale-while-revalidate=30" },
+      { "Cache-Control": "private, no-store" },
     );
   }),
 });
@@ -82,10 +81,6 @@ http.route({
       proposedToken: crypto.randomUUID(),
       now: Date.now(),
     });
-
-    if (result.status === "already_submitted") {
-      return json({ error: "This browser has already submitted a score.", code: result.status }, 409);
-    }
 
     return json({ token: result.token });
   }),
@@ -123,10 +118,10 @@ http.route({
       return json({ error: "Use 2–24 letters, numbers, spaces, dots, underscores, or hyphens." }, 400);
     }
     if (
-      !isIntegerInRange(body.score, 0, 100000) ||
-      !isIntegerInRange(body.wave, 0, 10000) ||
-      !isIntegerInRange(body.level, 0, 10000) ||
-      !isIntegerInRange(body.durationSeconds, 0, 86400)
+      !isNonNegativeSafeInteger(body.score) ||
+      !isNonNegativeSafeInteger(body.wave) ||
+      !isNonNegativeSafeInteger(body.level) ||
+      !isNonNegativeSafeInteger(body.durationSeconds)
     ) {
       return json({ error: "Invalid score data." }, 400);
     }
@@ -146,8 +141,6 @@ http.route({
     const errors: Record<string, [number, string]> = {
       invalid_run: [400, "That game session is invalid."],
       run_used: [409, "That game session has already been submitted."],
-      run_expired: [410, "That game session expired. Start a new game."],
-      already_submitted: [409, "This browser has already submitted a score."],
       username_taken: [409, "That username is already on the board."],
     };
     const failure = errors[result.status];
@@ -155,7 +148,13 @@ http.route({
       return json({ error: failure[1], code: result.status }, failure[0]);
     }
 
-    return json({ ok: true }, 201);
+    return json({
+      ok: true,
+      isPersonalBest: result.isPersonalBest,
+      personalBestUsername: result.personalBestUsername,
+      personalBestScore: result.personalBestScore,
+      attemptLikelyCheater: result.attemptLikelyCheater,
+    }, 201);
   }),
 });
 

@@ -13,11 +13,13 @@ GitHub Pages → Convex HTTP actions → Convex database
 Each game receives a one-time run token. At game over, the browser submits the username and the game's existing `issues resolved` count. The backend mutation atomically checks and writes the entry, so:
 
 - a run token can be submitted only once;
-- a browser ID can appear only once;
+- a browser can submit as many completed runs as it wants, while only its personal best is ranked;
 - usernames are unique without regard to case; and
-- simultaneous duplicate requests cannot replace the first accepted score.
+- simultaneous duplicate requests cannot alter an already-used run.
 
-This is intentionally a casual, no-login scoreboard. Clearing browser data or changing the request before its first submission can bypass browser identity and score integrity. True anti-cheat would require a server-verifiable deterministic replay.
+The leaderboard shows the top 100 personal bests and pins the current browser's exact rank when it falls below that cutoff. A deliberately generous integrity model labels, but never rejects, scores that exceed the game's maximum possible wave or score progression. It uses server wall time, so pausing or unfocusing the game only increases the time allowance. It does not use IP-based limits.
+
+This is intentionally a casual, no-login scoreboard. Clearing browser data or waiting out a plausible forged run can still bypass browser identity and heuristic score integrity. True anti-cheat would require a server-verifiable deterministic replay.
 
 ## Local development
 

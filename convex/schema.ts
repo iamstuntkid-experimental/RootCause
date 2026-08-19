@@ -7,6 +7,7 @@ export default defineSchema({
     token: v.string(),
     createdAt: v.number(),
     usedAt: v.optional(v.number()),
+    rulesVersion: v.optional(v.number()),
   })
     .index("by_browserId", ["browserId"])
     .index("by_token", ["token"]),
@@ -20,6 +21,10 @@ export default defineSchema({
     level: v.number(),
     durationSeconds: v.number(),
     submittedAt: v.number(),
+    likelyCheater: v.optional(v.boolean()),
+    integrityReason: v.optional(v.string()),
+    serverElapsedSeconds: v.optional(v.number()),
+    rulesVersion: v.optional(v.number()),
   })
     .index("by_browserId", ["browserId"])
     .index("by_usernameKey", ["usernameKey"])

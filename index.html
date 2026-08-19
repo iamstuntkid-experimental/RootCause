@@ -91,17 +91,31 @@
   .board-shell{width:min(94vw,760px);height:100%;min-height:0;margin:0;background:rgba(10,7,18,.97);border:1px solid #33265a;border-radius:8px;padding:clamp(1rem,4vw,2rem);box-shadow:0 0 50px rgba(109,74,202,.22);display:flex;flex-direction:column;overflow:hidden}
   .board-head{display:flex;flex:0 0 auto;align-items:flex-start;justify-content:space-between;gap:1rem;margin-bottom:1.25rem}
   .board-head h1{font-size:clamp(1.45rem,5vw,2.6rem)}
-  .icon-btn{width:auto;min-width:36px;height:36px;flex:0 0 auto;padding:0 .8rem;border:1px solid #33265a;border-radius:4px;background:transparent;color:var(--bone);font:inherit;cursor:pointer;white-space:nowrap}
+  .icon-btn{width:36px;height:36px;flex:0 0 auto;padding:0;border:1px solid #33265a;border-radius:4px;background:transparent;color:var(--bone);font:1.25rem/1 ui-monospace,Menlo,Consolas,monospace;cursor:pointer}
   .icon-btn:hover,.icon-btn:focus-visible{border-color:var(--violet);outline:none}
   .board-scroll{min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
   .board-table{width:100%;border-collapse:collapse;font-size:clamp(.68rem,2vw,.86rem)}
   .board-table th,.board-table td{padding:.72rem .55rem;border-bottom:1px solid #251a3d;text-align:left}
   .board-table th{position:sticky;top:0;z-index:1;background:#0a0712;color:var(--muted);font-size:.62rem;letter-spacing:.13em;text-transform:uppercase;font-weight:400}
+  .board-table tbody tr{background:rgba(167,139,255,var(--rank-glow,0));transition:background .12s}
+  .board-table tbody tr:first-child{box-shadow:inset 0 0 28px rgba(167,139,255,.24)}
   .board-table td:first-child{width:3rem;color:var(--muted)}
+  .board-table th:nth-child(3),.board-table td:nth-child(3){text-align:right}
   .board-table td:nth-child(3){color:var(--event);font-weight:700}
-  .board-table tbody tr:first-child td{color:var(--event)}
+  .current-player-name{color:#d5c6ff;text-shadow:0 0 14px rgba(167,139,255,.8);font-weight:700}
+  .integrity-badge{display:inline-block;margin-left:.5rem;padding:.12rem .32rem;border:1px solid rgba(255,82,64,.55);border-radius:3px;color:var(--alert);font-size:.52rem;letter-spacing:.08em;text-transform:uppercase;vertical-align:middle}
+  .score-display{display:flex;align-items:baseline;justify-content:flex-end;gap:.65rem;white-space:nowrap}
+  .best-score{color:var(--event);font-weight:700}
+  .current-attempt-score{color:#756d85;font-size:.62rem;font-weight:400}
+  .current-attempt-score b{font-size:.5rem;letter-spacing:.08em;text-transform:uppercase;font-weight:400}
+  .board-ellipsis td{padding:.45rem;text-align:center!important;color:var(--muted)!important;letter-spacing:.35em;background:#0a0712}
+  .board-pinned{flex:0 0 auto;display:grid;grid-template-columns:3rem minmax(0,1fr) minmax(8rem,max-content) 4rem 5rem;align-items:center;margin-top:.6rem;padding:.72rem .55rem;border:1px solid rgba(167,139,255,.55);border-radius:4px;background:#161026;box-shadow:0 -10px 26px rgba(0,0,0,.5),inset 0 0 24px rgba(167,139,255,.12);font-size:clamp(.68rem,2vw,.86rem)}
+  .board-pinned.hidden{display:none}
+  .board-pinned-rank{color:var(--muted)}
+  .board-pinned-score{text-align:right}
+  .board-pinned-wave,.board-pinned-time{padding-left:1.1rem}
   .board-empty{padding:2rem;text-align:center;color:var(--muted);font-size:.8rem}
-  @media (max-width:520px){.score-row{flex-direction:column}.score-row .lbtn{padding:.7rem}.board-table th:nth-child(5),.board-table td:nth-child(5){display:none}}
+  @media (max-width:520px){.score-row{flex-direction:column}.score-row .lbtn{padding:.7rem}.board-table th:nth-child(5),.board-table td:nth-child(5),.board-pinned-time{display:none}.board-pinned{grid-template-columns:2.5rem minmax(0,1fr) minmax(7rem,max-content) 3rem}.board-pinned-wave{padding-left:.5rem}.current-attempt-score{font-size:.55rem}}
   @media (prefers-reduced-motion: reduce){ .card,.btn{transition:none} .card:hover{transform:none} }
 </style>
 </head>
@@ -166,7 +180,7 @@
       <input id="scoreUsername" name="username" type="text" minlength="2" maxlength="24" pattern="[A-Za-z0-9][A-Za-z0-9_. \-]{1,23}" autocomplete="nickname" placeholder="username" required>
       <button class="lbtn" id="submitScoreBtn" type="submit">Submit score</button>
     </div>
-    <div class="score-note">One immutable entry per browser. Your score is the number of issues resolved.</div>
+    <div class="score-note">Retries welcome. Only your highest score is ranked.</div>
     <div id="scoreStatus" class="score-status" role="status" aria-live="polite"></div>
   </form>
   <div class="gameover-actions">
@@ -182,7 +196,7 @@
         <h1 id="leaderboardTitle">Incident <span class="c">Leaderboard</span></h1>
         <div class="sub">most issues resolved before production went down</div>
       </div>
-      <button class="icon-btn" id="closeLeaderboardBtn" aria-label="Back to main menu">← Back</button>
+      <button class="icon-btn" id="closeLeaderboardBtn" aria-label="Close leaderboard">×</button>
     </div>
     <div id="leaderboardScroll" class="board-scroll">
       <table class="board-table">
@@ -191,6 +205,7 @@
       </table>
       <div id="leaderboardStatus" class="board-empty" role="status" aria-live="polite">Loading incidents…</div>
     </div>
+    <div id="leaderboardPinned" class="board-pinned hidden" aria-label="Your leaderboard position"></div>
   </div>
 </div>
 
@@ -984,22 +999,19 @@ const Scoreboard = (() => {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...result, username, browserId: browserId(), token: runToken })
     });
-    try { localStorage.setItem(submissionKey, JSON.stringify({ username, score: result.score })); } catch {}
+    try {
+      localStorage.setItem(submissionKey, JSON.stringify({
+        username,
+        score: result.score,
+        bestUsername: data.personalBestUsername,
+        bestScore: data.personalBestScore
+      }));
+    } catch {}
     return data;
   }
 
   async function list(){
-    const scores = [];
-    let cursor = '';
-    let isDone = false;
-    while (!isDone){
-      const query = cursor ? '?cursor=' + encodeURIComponent(cursor) : '';
-      const result = await request('/api/scoreboard' + query, { method: 'GET' });
-      scores.push(...(result.scores || []));
-      cursor = result.continueCursor || '';
-      isDone = Boolean(result.isDone) || !cursor;
-    }
-    return scores;
+    return request('/api/scoreboard?browserId=' + encodeURIComponent(browserId()), { method: 'GET' });
   }
   function previous(){ try { return JSON.parse(localStorage.getItem(submissionKey) || 'null'); } catch { return null; } }
 
@@ -2875,8 +2887,10 @@ function gameOver(){
   if (!Scoreboard.configured()){
     scoreStatus.textContent = 'Leaderboard backend awaiting deployment.'; scoreButton.disabled = true; scoreInput.disabled = true;
   } else if (previous){
-    scoreStatus.textContent = 'This browser already submitted ' + previous.score + ' as ' + previous.username + '.';
-    scoreStatus.classList.add('success'); scoreButton.disabled = true; scoreInput.disabled = true; scoreInput.value = previous.username;
+    const bestScore = previous.bestScore ?? previous.score;
+    const bestUsername = previous.bestUsername || previous.username;
+    scoreStatus.textContent = 'Personal best ' + bestScore + ' as ' + bestUsername + '. Ship this run to improve it.';
+    scoreStatus.classList.add('success'); scoreButton.disabled = false; scoreInput.disabled = false; scoreInput.value = bestUsername;
   } else {
     scoreStatus.textContent = ''; scoreButton.disabled = false; scoreInput.disabled = false; scoreInput.value = '';
   }
@@ -2923,23 +2937,65 @@ function formatScoreTime(total){
   const m = Math.floor(total / 60), s = total % 60;
   return (m<10?'0':'') + m + ':' + (s<10?'0':'') + s;
 }
+function appendPlayerLabel(container, score){
+  const name = document.createElement('span'); name.textContent = score.username;
+  if (score.isCurrentPlayer) name.className = 'current-player-name';
+  container.appendChild(name);
+  if (score.likelyCheater){
+    const badge = document.createElement('span'); badge.className = 'integrity-badge'; badge.textContent = 'likely cheater';
+    badge.title = 'This run exceeded the game’s maximum possible progression.'; container.appendChild(badge);
+  }
+}
+function appendScoreDisplay(container, score, currentAttempt){
+  const display = document.createElement('div'); display.className = 'score-display';
+  if (score.isCurrentPlayer && currentAttempt && Number(currentAttempt.score) < score.score){
+    const current = document.createElement('span'); current.className = 'current-attempt-score';
+    const label = document.createElement('b'); label.textContent = 'current '; current.appendChild(label);
+    current.appendChild(document.createTextNode(String(currentAttempt.score))); display.appendChild(current);
+  }
+  const best = document.createElement('span'); best.className = 'best-score'; best.textContent = String(score.score); display.appendChild(best);
+  container.appendChild(display);
+}
+function createLeaderboardRow(score, currentAttempt){
+  const row = document.createElement('tr');
+  row.style.setProperty('--rank-glow', String(0.42 * Math.pow(0.95, Math.max(0, score.rank - 1))));
+  const rank = document.createElement('td'); rank.textContent = String(score.rank); row.appendChild(rank);
+  const player = document.createElement('td'); appendPlayerLabel(player, score); row.appendChild(player);
+  const points = document.createElement('td'); appendScoreDisplay(points, score, currentAttempt); row.appendChild(points);
+  const waveCell = document.createElement('td'); waveCell.textContent = String(score.wave); row.appendChild(waveCell);
+  const timeCell = document.createElement('td'); timeCell.textContent = formatScoreTime(score.durationSeconds); row.appendChild(timeCell);
+  return row;
+}
+function renderPinnedPlayer(container, score, currentAttempt){
+  container.innerHTML = '';
+  const rank = document.createElement('span'); rank.className = 'board-pinned-rank'; rank.textContent = String(score.rank); container.appendChild(rank);
+  const player = document.createElement('span'); appendPlayerLabel(player, score); container.appendChild(player);
+  const points = document.createElement('span'); points.className = 'board-pinned-score'; appendScoreDisplay(points, score, currentAttempt); container.appendChild(points);
+  const waveCell = document.createElement('span'); waveCell.className = 'board-pinned-wave'; waveCell.textContent = String(score.wave); container.appendChild(waveCell);
+  const timeCell = document.createElement('span'); timeCell.className = 'board-pinned-time'; timeCell.textContent = formatScoreTime(score.durationSeconds); container.appendChild(timeCell);
+}
 async function openLeaderboard(event){
   leaderboardReturnFocus = event && event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
   const overlay = document.getElementById('leaderboard');
   const scroll = document.getElementById('leaderboardScroll');
   const body = document.getElementById('leaderboardBody');
   const status = document.getElementById('leaderboardStatus');
-  body.innerHTML = ''; status.hidden = false; status.textContent = Scoreboard.configured() ? 'Loading incidents…' : 'Leaderboard backend awaiting deployment.';
+  const pinned = document.getElementById('leaderboardPinned');
+  body.innerHTML = ''; pinned.innerHTML = ''; pinned.classList.add('hidden'); status.hidden = false; status.textContent = Scoreboard.configured() ? 'Loading incidents…' : 'Leaderboard backend awaiting deployment.';
   overlay.classList.remove('hidden'); scroll.scrollTop = 0; document.getElementById('closeLeaderboardBtn').focus();
   if (!Scoreboard.configured()) return;
   try {
-    const scores = await Scoreboard.list();
+    const result = await Scoreboard.list();
+    const scores = result.scores || [];
+    const currentAttempt = Scoreboard.previous();
     if (!scores.length){ status.textContent = 'No incidents submitted yet. Be the first.'; return; }
     for (let i = 0; i < scores.length; i++){
-      const row = document.createElement('tr');
-      const cells = [String(i+1), scores[i].username, String(scores[i].score), String(scores[i].wave), formatScoreTime(scores[i].durationSeconds)];
-      for (const value of cells){ const cell = document.createElement('td'); cell.textContent = value; row.appendChild(cell); }
-      body.appendChild(row);
+      body.appendChild(createLeaderboardRow(scores[i], currentAttempt));
+    }
+    if (result.currentPlayer && result.currentPlayer.rank > 100){
+      const ellipsis = document.createElement('tr'); ellipsis.className = 'board-ellipsis';
+      const cell = document.createElement('td'); cell.colSpan = 5; cell.textContent = '…'; ellipsis.appendChild(cell); body.appendChild(ellipsis);
+      renderPinnedPlayer(pinned, result.currentPlayer, currentAttempt); pinned.classList.remove('hidden');
     }
     scroll.scrollTop = 0;
     status.hidden = true;
@@ -2960,11 +3016,14 @@ document.getElementById('scoreForm').addEventListener('submit', async event => {
   const status = document.getElementById('scoreStatus');
   button.disabled = true; input.disabled = true; status.textContent = 'Shipping score…'; status.className = 'score-status';
   try {
-    await Scoreboard.submit(input.value, finalScoreResult);
-    status.textContent = 'Score shipped. The first submission is now locked.'; status.classList.add('success');
+    const result = await Scoreboard.submit(input.value, finalScoreResult);
+    status.textContent = result.isPersonalBest
+      ? 'New personal best: ' + result.personalBestScore + '.'
+      : 'Score shipped. Personal best remains ' + result.personalBestScore + '.';
+    status.classList.add('success');
   } catch (error) {
     status.textContent = error.message || 'Could not submit the score.'; status.classList.add('error');
-    if (error.code !== 'already_submitted' && error.code !== 'run_used') { button.disabled = false; input.disabled = false; }
+    if (error.code !== 'run_used') { button.disabled = false; input.disabled = false; }
   }
 });
 // audio: init on first interaction; M or the speaker button toggles mute
