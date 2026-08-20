@@ -1164,25 +1164,49 @@ const musicEngine = (typeof createMusicEngine === 'function') ? createMusicEngin
 const droneEngine = (typeof createDroneEngine === 'function') ? createDroneEngine() : null;
 const DRONE_SCENE = 'signal';   // menu/loadout ambience (atrium|subfloor|pool|signal|dusk)
 let musFreq = null, drnFreq = null;
-const AUDIO = { sfx: 80, drone: 15, music: 0, musicSlow: 6, musicReverb: 0 };
-function bossMusicVol(){ return Math.min(100, AUDIO.music * 2); }
+const AUDIO = { sfx: 80, drone: 100, music: 100, musicSlow: 6, musicReverb: 0 };
+// Music engine per-mode presets, dialed in via the sandbox tool. Note: `level`, `seed`, and
+// `pressure` are intentionally NOT applied from here — the game already drives those live
+// and more accurately (setSeed/setLevel on level-up + restart; setPressure every frame off
+// live enemy count in update()), so a static preset value would just get overwritten anyway.
+const MUSIC_MODE_PRESETS = {
+  waves: { vibe:"epic", auto:true, variety:100, padWave:"saw", padVar:100, padVol:0,  reverb:53, tempoMul:0.69, bassOn:true,  groove:2, bassWave:"tri", bassVol:18, drumsOn:false, drive:8,  drumVol:7,  master:78 },
+  boss:  { vibe:"epic", auto:true, variety:100, padWave:"tri", padVar:100, padVol:70, reverb:60, tempoMul:1,    bassOn:false, groove:0, bassWave:"saw", bassVol:25, drumsOn:true,  drive:65, drumVol:50, master:78 },
+  death: { vibe:"epic", auto:true, variety:100, padWave:"saw", padVar:100, padVol:0,  reverb:60, tempoMul:1,    bassOn:false, groove:0, bassWave:"saw", bassVol:25, drumsOn:false, drive:65, drumVol:50, master:78 },
+  menu:  { vibe:"epic", auto:true, variety:0,   padWave:"saw", padVar:100, padVol:0,  reverb:72, tempoMul:1,    bassOn:true,  groove:2, bassWave:"tri", bassVol:13, drumsOn:false, drive:15, drumVol:27, master:78 },
+  drone: { vibe:"epic", auto:true, variety:100, padWave:"saw", padVar:100, padVol:70, reverb:45, tempoMul:1,    bassOn:true,  groove:0, bassWave:"saw", bassVol:25, drumsOn:true,  drive:65, drumVol:50, master:52 },
+};
+function applyMusicPreset(name){
+  if (!musicEngine) return;
+  const cfg = MUSIC_MODE_PRESETS[name] || MUSIC_MODE_PRESETS.waves;
+  const ms = musicEngine.settings;
+  ms.vibe = cfg.vibe; ms.auto = cfg.auto; ms.variety = cfg.variety; ms.padWave = cfg.padWave; ms.padVar = cfg.padVar;
+  ms.tempoMul = cfg.tempoMul; ms.bassOn = cfg.bassOn; ms.groove = cfg.groove; ms.bassWave = cfg.bassWave;
+  ms.drumsOn = cfg.drumsOn; ms.drive = cfg.drive;
+  musicEngine.set('reverb', cfg.reverb);
+  musicEngine.set('padVol', cfg.padVol);
+  musicEngine.set('bassVol', cfg.bassVol);
+  musicEngine.set('drumVol', cfg.drumVol);
+  musicEngine.set('master', cfg.master * (AUDIO.music/100));
+}
 function applyAudio(k){ Sound.init();
   if (k === 'sfx') Sound.setSfx(AUDIO.sfx/100 * 1.2);
-  else if (k === 'drone'){ if (droneEngine) droneEngine.set('vol', AUDIO.drone); }
-  else if (k === 'music' && musicEngine) musicEngine.set('master', (bossRef && !bossRef.dead) ? bossMusicVol() : AUDIO.music);
+  else if (k === 'drone'){ Sound.setDrone(AUDIO.drone/100); }
+  else if (k === 'music' && musicEngine){ const cfg = MUSIC_MODE_PRESETS[musicEngine.settings.mode] || MUSIC_MODE_PRESETS.waves; musicEngine.set('master', cfg.master * (AUDIO.music/100)); }
   else if (k === 'musicSlow'){ if (musicEngine) musicEngine.set('tempoMul', 1 - AUDIO.musicSlow/100 * 0.5); }
   else if (k === 'musicReverb'){ if (musicEngine) musicEngine.set('reverb', AUDIO.musicReverb); } }
 function musicApplyState(){   // hand off between the drone engine (menus) and arcade engine (play/death)
   if (Sound.muted()){ if (musicEngine) musicEngine.stop(); if (droneEngine) droneEngine.leave(); return; }
   if (state === 'menu'){
     if (musicEngine) musicEngine.stop();
-    if (droneEngine){ droneEngine.setScene(DRONE_SCENE); droneEngine.set('vol', AUDIO.drone); droneEngine.enter(); }
+    // Liminal menu ambience disabled — the restored Sound-engine drone plays in every state now. Kept for later.
+    /* if (droneEngine){ droneEngine.setScene(DRONE_SCENE); droneEngine.set('vol', AUDIO.drone); droneEngine.enter(); } */
   } else if (state === 'over'){
     if (droneEngine) droneEngine.leave();
-    if (musicEngine){ musicEngine.setMode('death'); musicEngine.set('master', AUDIO.music); if (!musicEngine.isPlaying()) musicEngine.start(); }
+    if (musicEngine){ applyMusicPreset('death'); musicEngine.setMode('death'); if (!musicEngine.isPlaying()) musicEngine.start(); }
   } else {   // play / pause
     if (droneEngine) droneEngine.leave();
-    if (musicEngine){ if (bossRef && !bossRef.dead){ musicEngine.setMode('boss'); musicEngine.set('master', bossMusicVol()); } else { musicEngine.setMode('waves'); musicEngine.set('master', AUDIO.music); } if (!musicEngine.isPlaying()) musicEngine.start(); }
+    if (musicEngine){ if (bossRef && !bossRef.dead){ applyMusicPreset('boss'); musicEngine.setMode('boss'); } else { applyMusicPreset('waves'); musicEngine.setMode('waves'); } if (!musicEngine.isPlaying()) musicEngine.start(); }
   } }
 let vizTop = null, vizBot = null;   // smoothed visualizer bar heights
 const TUNE = { xp:0.80, playerDmg:1.05, enemyHp:1.25, heal:0.45, pickupRate:0.85, techDebt:0.090, spawn:1.00, speed:1.00 };
@@ -1191,7 +1215,7 @@ const TUNE = { xp:0.80, playerDmg:1.05, enemyHp:1.25, heal:0.45, pickupRate:0.85
 const Sound = (function(){
   let ctx = null, master = null, sfxBus = null, wet = null, nbuf = null, muted = false;
   let lastFire = 0, lastKill = 0, lastHurt = 0, lastTick = 0, lastWub = 0;
-  let droneGain = null, droneFilter = null, bossOn = false;
+  let droneGain = null, droneFilter = null, droneVol = null, bossOn = false;
   let analyser = null, freqData = null;
   function init(){
     if (ctx) return;
@@ -1206,7 +1230,7 @@ const Sound = (function(){
     wet = ctx.createGain(); wet.gain.value = 1; wet.connect(delay);
     nbuf = ctx.createBuffer(1, ctx.sampleRate * 0.6, ctx.sampleRate);
     const d = nbuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random()*2-1;
-    /* startAmbient(); */   // drone disabled while music engine runs — kept for later
+    startAmbient();   // restored — the pre-Liminal ambient pad
   }
   function T(){ return ctx.currentTime; }
   function voice(freq, o){ o = o || {}; const t0 = T() + (o.t0||0), dur = o.dur||0.15, peak = o.peak||0.2;
@@ -1229,15 +1253,16 @@ const Sound = (function(){
   function startAmbient(){
     droneFilter = ctx.createBiquadFilter(); droneFilter.type = 'lowpass'; droneFilter.frequency.value = 300;
     droneGain = ctx.createGain(); droneGain.gain.value = 0.0001;
-    droneFilter.connect(droneGain); droneGain.connect(master);
+    droneVol = ctx.createGain(); droneVol.gain.value = 1;   // overall volume multiplier — leaves the tuned levels below untouched
+    droneFilter.connect(droneGain); droneGain.connect(droneVol); droneVol.connect(master);
     const chorus = ctx.createGain(); chorus.gain.value = 0.6; chorus.connect(master);
-    const spaceSend = ctx.createGain(); spaceSend.gain.value = 0.5; droneGain.connect(spaceSend); spaceSend.connect(wet);
+    const spaceSend = ctx.createGain(); spaceSend.gain.value = 0.5; droneVol.connect(spaceSend); spaceSend.connect(wet);
     // chorus — three delay voices with slow LFO-modulated delay times for shimmer/movement
     const rate = [0.11, 0.18, 0.27], depth = [0.004, 0.003, 0.0035], base = [0.017, 0.023, 0.031];
     for (let i = 0; i < 3; i++){ const d = ctx.createDelay(); d.delayTime.value = base[i];
       const lfo = ctx.createOscillator(); lfo.type = 'sine'; lfo.frequency.value = rate[i];
       const lg = ctx.createGain(); lg.gain.value = depth[i]; lfo.connect(lg); lg.connect(d.delayTime); lfo.start();
-      droneGain.connect(d); d.connect(chorus); }
+      droneVol.connect(d); d.connect(chorus); }
     // oscillator bank with slow detune drift (variation)
     const freqs = [55, 82.5, 110, 165], types = ['sine', 'sine', 'triangle', 'sine'], gains = [0.55, 0.3, 0.14, 0.06];
     for (let i = 0; i < freqs.length; i++){ const o = ctx.createOscillator(); o.type = types[i]; o.frequency.value = freqs[i]; o.detune.value = (i-1)*7;
@@ -1288,7 +1313,7 @@ const Sound = (function(){
       case 'click': voice(760, {type:'square', dur:0.03, peak:0.07, freqEnd:600}); break;
     }
   }
-  return { init, play, setBoss, setSfx(v){ if (sfxBus) sfxBus.gain.value = v; }, setDrone(v){ if (!ctx) return; if (!droneGain && v > 0) startAmbient(); if (droneGain){ droneGain.gain.cancelScheduledValues(ctx.currentTime); droneGain.gain.setValueAtTime(Math.max(0.0001, v), ctx.currentTime); } }, spectrum(){ if (!analyser) return null; analyser.getByteFrequencyData(freqData); return freqData; }, toggle(){ muted = !muted; if (master) master.gain.value = muted ? 0 : 0.32; return muted; }, muted(){ return muted; } };
+  return { init, play, setBoss, setSfx(v){ if (sfxBus) sfxBus.gain.value = v; }, setDrone(v){ if (!ctx || !droneVol) return; droneVol.gain.setTargetAtTime(Math.max(0, v), ctx.currentTime, 0.05); }, spectrum(){ if (!analyser) return null; analyser.getByteFrequencyData(freqData); return freqData; }, toggle(){ muted = !muted; if (master) master.gain.value = muted ? 0 : 0.32; return muted; }, muted(){ return muted; } };
 })();
 
 const SHIELDABLE = { bacterium:1, virus:1, divider:1, biofilm:1, mutant:1, hider:1, encap:1, toxin:1, superbug:1, shooter:1 };
@@ -1449,11 +1474,11 @@ function roundTri(g, pts, r){
   g.closePath();
 }
 function buildSeerImg(){   // rounded indigo triangle body (eye drawn live on top)
-  const mk = flash => bake(88, g => {
-    g.fillStyle = flash ? '#e9e3ff' : '#2e3192';
+  const mk = color => bake(88, g => {
+    g.fillStyle = color;
     roundTri(g, SEER.TRI, 3.6); g.fill();
   });
-  return [mk(false), mk(true)];
+  return [mk('#2e3192'), mk('#e9e3ff'), mk('#f53a9f')];   // normal, hit-flash, Event Volume (matches the bar's 75-100% segment)
 }
 const IMG = {
   seer: buildSeerImg(),
@@ -1530,22 +1555,33 @@ const SPRITES = {
   player(c, x, y, frame){                                   // Seer — indigo triangle with a living eye
     const hit = player.iframes > 0;
     const pu = 1 + Math.sin(frame * 4) * 0.03;
+    const evOpen = !hit && player.blink <= 0 && cyto >= CYTO_MAX * 0.75;   // last quarter — eye opens into a full circle
+    const evFade = clamp((cyto / CYTO_MAX - 0.75) / 0.25, 0, 1);          // 0→1 across that same quarter — body tints toward pink
+    const evVib = clamp((cyto / CYTO_MAX - 0.9) / 0.1, 0, 1);             // 0→1 across the final 10% — vigorous shake
     let op;                                                  // eye openness
     if (hit) op = 1.4;                                       // damage: eye snaps wide
     else if (player.blink > 0){ const p = 1 - player.blink / 0.16; op = Math.abs(1 - 2 * p); }
+    else if (evOpen) op = 1.16 + 0.08 * Math.sin(frame * 5);   // Event Volume in the red — wide-eyed tell to deploy
     else op = 1;
-    c.save(); c.translate(x, y); c.rotate(player.lean); c.scale(pu, pu);
-    // body (baked); flash overlay while invulnerable
+    const jx = evVib > 0 ? rand(-1, 1) * 2.8 * evVib : 0, jy = evVib > 0 ? rand(-1, 1) * 2.8 * evVib : 0;
+    c.save(); c.translate(x + jx, y + jy); c.rotate(player.lean); c.scale(pu, pu);
+    // body (baked); flash overlay while invulnerable, pink overlay as Event Volume nears the red
     c.drawImage(IMG.seer[0], -IMG.seer[0].width / 2, -IMG.seer[0].height / 2);
+    if (evFade > 0){ c.globalAlpha = evFade; c.drawImage(IMG.seer[2], -IMG.seer[2].width / 2, -IMG.seer[2].height / 2); c.globalAlpha = 1; }
     if (hit){ c.globalAlpha = 0.35 + 0.35 * Math.abs(Math.sin(frame * 26)); c.drawImage(IMG.seer[1], -IMG.seer[1].width / 2, -IMG.seer[1].height / 2); c.globalAlpha = 1; }
-    // eye white (almond); height scales with openness
-    const w = SEER.EYEW, h = Math.max(0.4, SEER.EYEH * op), ey = SEER.EYEY;
+    // eye white: almond normally, opens into a full circle once Event Volume passes 75%; height/radius scales with openness
+    const w = SEER.EYEW, ey = SEER.EYEY;
+    const evR = w * 0.94 * op, h = Math.max(0.4, SEER.EYEH * op);
     c.fillStyle = '#ffffff';
-    c.beginPath(); c.moveTo(-w, ey); c.quadraticCurveTo(0, ey - h, w, ey); c.quadraticCurveTo(0, ey + h, -w, ey); c.closePath();
+    c.beginPath();
+    if (evOpen) c.arc(0, ey, evR, 0, TAU);
+    else { c.moveTo(-w, ey); c.quadraticCurveTo(0, ey - h, w, ey); c.quadraticCurveTo(0, ey + h, -w, ey); }
+    c.closePath();
     c.fill(); c.clip();
     // iris (clipped to the white so it never spills), offset toward movement
+    const extent = evOpen ? evR : h;
     const ox = player.irisX * (w - SEER.EYER) * 0.82;
-    const oy = ey + player.irisY * (h - SEER.EYER) * 0.82;
+    const oy = ey + player.irisY * (extent - SEER.EYER) * 0.82;
     c.fillStyle = '#2e3192';
     c.beginPath(); c.arc(ox, oy, SEER.EYER, 0, TAU); c.fill();
     c.restore();
@@ -1740,7 +1776,7 @@ function spawnBoss(n){
   const langs = [0, 1, 2]; for (let i = langs.length - 1; i > 0; i--){ const j = (Math.random()*(i+1))|0; const t = langs[i]; langs[i] = langs[j]; langs[j] = t; }
   e.shields = []; const shp = Math.max(120, e.maxHp * 0.09);   // per-layer shield HP (tunable)
   for (let i = 0; i < tier; i++) e.shields.push({ lang: langs[i % 3], hp: shp, max: shp });
-  placeAtRing(e); bossRef = e; Sound.play('bossspawn'); Sound.setBoss(true); if (musicEngine){ musicEngine.transitionToBoss(); musicEngine.set('master', bossMusicVol()); }
+  placeAtRing(e); bossRef = e; Sound.play('bossspawn'); Sound.setBoss(true); if (musicEngine){ applyMusicPreset('boss'); musicEngine.transitionToBoss(); }
 }
 /* ---------- AI agent behaviour (benign drift/steal · rogue flee/emit) ---------- */
 const agentRefs = [];
@@ -2153,7 +2189,7 @@ function killPatho(e){
   const col = e.kind === 'superbug' || e.kind === 'boss' ? '#ff9d2e' : e.kind === 'virus' || e.kind === 'mutant' ? '#d05ce8' : '#8fd46a';
   burst(e.x, e.y, col, e.kind === 'biofilm' || e.kind === 'superbug' || e.kind === 'boss' ? 16 : 8);
   if (e.kind === 'boss'){
-    bossRef = null; shake = Math.max(shake, 16); Sound.setBoss(false); freeze(0.14); slowMo(0.6); kick(rand(0,TAU), 10); abT = 0.22; if (musicEngine){ musicEngine.setMode('waves'); musicEngine.set('master', AUDIO.music); musicEngine.duck(0.4, 140); }
+    bossRef = null; shake = Math.max(shake, 16); Sound.setBoss(false); freeze(0.14); slowMo(0.6); kick(rand(0,TAU), 10); abT = 0.22; if (musicEngine){ applyMusicPreset('waves'); musicEngine.setMode('waves'); musicEngine.duck(0.4, 140); }
     for (let i = 0; i < 6; i++) dropAntigen(e.x + rand(-40,40), e.y + rand(-40,40), 10);
     dropConsumable(e.x - 20, e.y, true); dropConsumable(e.x + 20, e.y, true);
     banners.push({ text: 'INCIDENT RESOLVED', sub: '', life: 2.8, color: '#6cc406' });
