@@ -19,6 +19,8 @@ Each game receives a one-time run token. At game over, the browser submits the u
 
 The leaderboard shows the top 100 personal bests and pins the current browser's exact rank when it falls below that cutoff. A deliberately generous integrity model labels, but never rejects, scores that exceed the game's maximum possible wave or score progression. It uses server wall time, so pausing or unfocusing the game only increases the time allowance. It does not use IP-based limits.
 
+The browser blocks a small set of offensive usernames before submission and lets the player edit and retry. Because the frontend is public and editable, this is a convenience filter rather than a security boundary; authoritative moderation would need the same policy on the backend.
+
 This is intentionally a casual, no-login scoreboard. Clearing browser data or waiting out a plausible forged run can still bypass browser identity and heuristic score integrity. True anti-cheat would require a server-verifiable deterministic replay.
 
 ## Local development

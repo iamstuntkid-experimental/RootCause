@@ -93,13 +93,13 @@
   .board-head h1{font-size:clamp(1.45rem,5vw,2.6rem)}
   .icon-btn{width:36px;height:36px;flex:0 0 auto;padding:0;border:1px solid #33265a;border-radius:4px;background:transparent;color:var(--bone);font:1.25rem/1 ui-monospace,Menlo,Consolas,monospace;cursor:pointer}
   .icon-btn:hover,.icon-btn:focus-visible{border-color:var(--violet);outline:none}
-  .board-scroll{min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+  .board-scroll{min-height:0;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
   .board-table{width:100%;table-layout:fixed;border-collapse:collapse;font-size:clamp(.68rem,2vw,.86rem)}
   .board-col-rank{width:3rem}
   .board-col-score{width:13rem}
   .board-col-wave{width:4rem}
   .board-col-time{width:5rem}
-  .board-table th,.board-table td{padding:.72rem .55rem;border-bottom:1px solid #251a3d;text-align:left}
+  .board-table th,.board-table td{min-width:0;overflow:hidden;padding:.72rem .55rem;border-bottom:1px solid #251a3d;text-align:left}
   .board-table th{position:sticky;top:0;z-index:1;background:#0a0712;color:var(--muted);font-size:.62rem;letter-spacing:.13em;text-transform:uppercase;font-weight:400}
   .board-table td:first-child{color:var(--muted)}
   .board-table th:nth-child(3),.board-table td:nth-child(3){text-align:right}
@@ -108,9 +108,11 @@
   .board-table .rank-second td,.board-table .rank-second td:first-child,.board-table .rank-second .best-score,.board-table .rank-second .current-player-name{color:#f4f7ff;text-shadow:0 0 7px rgba(244,247,255,.95),0 0 18px rgba(184,207,255,.68)}
   .board-table .rank-third td,.board-table .rank-third td:first-child,.board-table .rank-third .best-score,.board-table .rank-third .current-player-name{color:#e49a57;text-shadow:0 0 8px rgba(228,154,87,.56)}
   .board-player-cell{position:relative;white-space:nowrap}
+  .player-label{display:flex;min-width:0;max-width:100%;align-items:center;overflow:hidden}
+  .player-name{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .current-player-name{color:#d5c6ff;text-shadow:0 0 14px rgba(167,139,255,.8);font-weight:700}
-  .integrity-badge{position:relative;z-index:2;display:inline-block;margin-left:-.3rem;padding:.18rem .42rem;border:2px solid #ff8a72;border-radius:2px;background:#b91f2d;color:#fff8f0!important;box-shadow:0 2px 0 #5f0b16,0 0 12px rgba(255,65,62,.5);text-shadow:none!important;font-size:.54rem;font-weight:900;line-height:1;letter-spacing:.08em;text-transform:uppercase;vertical-align:middle;transform:translateY(-.12rem) rotate(-7deg)}
-  .score-display{display:flex;align-items:baseline;justify-content:flex-end;gap:.65rem;white-space:nowrap}
+  .integrity-badge{position:relative;z-index:2;display:inline-block;flex:0 0 auto;margin-left:-.3rem;padding:.18rem .42rem;border:2px solid #ff8a72;border-radius:2px;background:#b91f2d;color:#fff8f0!important;box-shadow:0 2px 0 #5f0b16,0 0 12px rgba(255,65,62,.5);text-shadow:none!important;font-size:.54rem;font-weight:900;line-height:1;letter-spacing:.08em;text-transform:uppercase;vertical-align:middle;transform:translateY(-.12rem) rotate(-7deg)}
+  .score-display{display:flex;min-width:0;overflow:hidden;align-items:baseline;justify-content:flex-end;gap:.65rem;white-space:nowrap}
   .best-score{color:var(--event);font-weight:700}
   .board-table .current-attempt-score{color:#756d85;text-shadow:none;font-size:.62rem;font-weight:400}
   .current-attempt-score b{font-size:.5rem;letter-spacing:.08em;text-transform:uppercase;font-weight:400}
@@ -2892,7 +2894,7 @@ function gameOver(){
   const scoreStatus = document.getElementById('scoreStatus');
   const scoreInput = document.getElementById('scoreUsername');
   const scoreButton = document.getElementById('submitScoreBtn');
-  scoreStatus.className = 'score-status';
+  scoreStatus.className = 'score-status'; delete scoreStatus.dataset.localValidation;
   const previous = Scoreboard.previous();
   if (!Scoreboard.configured()){
     scoreStatus.textContent = 'Leaderboard backend awaiting deployment.'; scoreButton.disabled = true; scoreInput.disabled = true;
@@ -2943,18 +2945,44 @@ function restartCore(starter){
 document.getElementById('startBtn').onclick = beginGame;
 
 let leaderboardReturnFocus = null;
+const BLOCKED_USERNAME_WORDS = new Set([
+  'asshole', 'bastard', 'bitch', 'cocksucker', 'cunt', 'dickhead', 'douchebag',
+  'faggot', 'fuck', 'motherfucker', 'nazi', 'nigga', 'nigger', 'pussy', 'retard',
+  'shit', 'shithead', 'slut', 'twat', 'whore'
+]);
+const BLOCKED_USERNAME_COMPOUNDS = new Set([
+  'bullshit', 'dumbass', 'fuckoff', 'fuckyou', 'jackass', 'pieceofshit'
+]);
+const BLOCKED_USERNAME_SUBSTRINGS = [
+  'asshole', 'bitch', 'cocksucker', 'dickhead', 'douchebag', 'faggot', 'fuck',
+  'motherfucker', 'nazi', 'nigga', 'nigger', 'shithead', 'slut', 'twat', 'whore'
+];
+function usernameHasBlockedLanguage(value){
+  const normalized = value.toLowerCase().normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[4@]/g, 'a').replace(/8/g, 'b').replace(/3/g, 'e')
+    .replace(/[1!|]/g, 'i').replace(/0/g, 'o').replace(/[5$]/g, 's')
+    .replace(/[7+]/g, 't');
+  const words = normalized.split(/[^a-z]+/).filter(Boolean);
+  const collapsed = words.join('');
+  return words.some(word => BLOCKED_USERNAME_WORDS.has(word)) ||
+    words.some(word => BLOCKED_USERNAME_SUBSTRINGS.some(term => word.includes(term))) ||
+    BLOCKED_USERNAME_WORDS.has(collapsed) || BLOCKED_USERNAME_COMPOUNDS.has(collapsed);
+}
 function formatScoreTime(total){
   const m = Math.floor(total / 60), s = total % 60;
   return (m<10?'0':'') + m + ':' + (s<10?'0':'') + s;
 }
 function appendPlayerLabel(container, score){
-  const name = document.createElement('span'); name.textContent = score.username;
-  if (score.isCurrentPlayer) name.className = 'current-player-name';
-  container.appendChild(name);
+  const label = document.createElement('div'); label.className = 'player-label';
+  const name = document.createElement('span'); name.className = 'player-name'; name.textContent = score.username;
+  if (score.isCurrentPlayer) name.classList.add('current-player-name');
+  label.appendChild(name);
   if (score.likelyCheater){
     const badge = document.createElement('span'); badge.className = 'integrity-badge'; badge.textContent = 'likely cheater';
-    badge.title = 'This run exceeded the game’s maximum possible progression.'; container.appendChild(badge);
+    badge.title = 'This run exceeded the game’s maximum possible progression.'; label.appendChild(badge);
   }
+  container.title = score.username; container.appendChild(label);
 }
 function appendScoreDisplay(container, score, currentAttempt){
   const display = document.createElement('div'); display.className = 'score-display';
@@ -3023,9 +3051,17 @@ document.getElementById('scoreForm').addEventListener('submit', async event => {
   const input = document.getElementById('scoreUsername');
   const button = document.getElementById('submitScoreBtn');
   const status = document.getElementById('scoreStatus');
+  const username = input.value.trim().replace(/\s+/g, ' ');
+  if (usernameHasBlockedLanguage(username)){
+    status.textContent = 'Please choose another username; that one hits our language filter.';
+    status.className = 'score-status error'; status.dataset.localValidation = 'username';
+    input.focus(); input.select();
+    return;
+  }
+  input.value = username; delete status.dataset.localValidation;
   button.disabled = true; input.disabled = true; status.textContent = 'Shipping score…'; status.className = 'score-status';
   try {
-    const result = await Scoreboard.submit(input.value, finalScoreResult);
+    const result = await Scoreboard.submit(username, finalScoreResult);
     status.textContent = result.isPersonalBest
       ? 'New personal best: ' + result.personalBestScore + '.'
       : 'Score shipped. Personal best remains ' + result.personalBestScore + '.';
@@ -3033,6 +3069,12 @@ document.getElementById('scoreForm').addEventListener('submit', async event => {
   } catch (error) {
     status.textContent = error.message || 'Could not submit the score.'; status.classList.add('error');
     if (error.code !== 'run_used') { button.disabled = false; input.disabled = false; }
+  }
+});
+document.getElementById('scoreUsername').addEventListener('input', () => {
+  const status = document.getElementById('scoreStatus');
+  if (status.dataset.localValidation === 'username'){
+    status.textContent = ''; status.className = 'score-status'; delete status.dataset.localValidation;
   }
 });
 // audio: init on first interaction; M or the speaker button toggles mute
