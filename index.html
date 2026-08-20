@@ -2839,9 +2839,18 @@ function drawHUD(){
   // dual visualizers (full width, dashed baseline, 33% opacity)
   drawViz(true);   // top spectrum only
 
-  // ===== full-width UPTIME + EVENT VOLUME bars (labelled inside, like the SDK bars) =====
-  const fbH = 16, hbY = H - 34, evY = H - 16;
-  const barLabel = (txt, y) => { cx.save(); cx.shadowColor = 'rgba(0,0,0,.55)'; cx.shadowBlur = 2; cx.fillStyle = '#ffffff'; cx.font = RB(9,700); cx.textAlign = 'left'; cx.fillText(txt, 9, y + fbH/2 + 3); cx.restore(); };
+  // ===== bottom row: SDK (bottom-left) + Info (bottom-right) — fixed width, flush at the very bottom =====
+  const footH = 54;                            // shared height for both bottom panels
+  const panelW = 430;                          // fixed width — SDK band now matches this exactly, no longer stretches
+  const panelY = H - footH;                    // locked to the bottom edge
+  const panelX = W - 22 - panelW;               // info panel — locked bottom-right
+  const bandTop = panelY, bandH = footH;         // SDK band — locked bottom-left (boxX below)
+
+  // ===== UPTIME + EVENT VOLUME — moved above the SDK/Info row; taller bars, doubled title size =====
+  const fbH = 32, barGap = 4;                  // fbH doubled from 16
+  const evY = bandTop - 16 - fbH;               // sits just above the SDK/Info row
+  const hbY = evY - barGap - fbH;               // UPTIME sits directly above EVENT VOLUME
+  const barLabel = (txt, y) => { cx.save(); cx.shadowColor = 'rgba(0,0,0,.55)'; cx.shadowBlur = 2; cx.fillStyle = '#ffffff'; cx.font = RB(18,700); cx.textAlign = 'left'; cx.fillText(txt, 9, y + fbH/2 + 6); cx.restore(); };
   cx.fillStyle = TRACK; cx.fillRect(0, hbY, W, fbH);
   cx.fillStyle = player.hp < player.maxHp*.3 ? '#ff5240' : '#67c800'; cx.fillRect(0, hbY, W*clamp(player.hp/player.maxHp,0,1), fbH);
   barLabel('UPTIME MONITOR', hbY);
@@ -2851,12 +2860,10 @@ function drawHUD(){
     const f = clamp((ck - i*0.25)/0.25, 0, 1); if (f > 0){ cx.fillStyle = stormT>0 ? '#ff5240' : segCols[i]; cx.fillRect(sx, evY, segW*f, fbH); } }
   barLabel(stormT>0 ? 'EVENT VOLUME — INCIDENT' : 'EVENT VOLUME', evY);
 
-  // ===== SDK — active-language box + three mastery bars (heights match the LVL box) =====
+  // ===== SDK — active-language box + three mastery bars, fixed width matching the info panel, locked bottom-left =====
   const sc = STRAINS[player.strain].c;
-  const infoPanelW = 430, infoPanelX = W - 22 - infoPanelW;
-  const bandTop = H - 96, bandH = 54;                       // matches the info (LVL) box
   const boxX = 22, boxW = 92;
-  const barsX = boxX + boxW + 16, barsRight = infoPanelX - 20, barsW = Math.max(140, barsRight - barsX);
+  const barsX = boxX + boxW + 16, barsW = panelW - boxW - 16;   // fixed total width == panelW, doesn't stretch with window size
   const barH = 16, gap = 3, rowStep = barH + gap;           // 3 bars + 2 gaps = 54, matching the box
   // SDK box — opaque, active-language colour, square corners; "SDK" centred in dark purple
   cx.fillStyle = sc; cx.fillRect(boxX, bandTop, boxW, bandH);
@@ -2871,11 +2878,10 @@ function drawHUD(){
     cx.fillText(STRAINS[i].n.toUpperCase(), barsX + 9, ry + barH/2 + 3); cx.restore();
   }
 
-  // ===== bottom-right info panel (fixed width, container box) =====
+  // ===== bottom-right info panel (fixed width, locked bottom-right, container box) =====
   let hostiles = 0; for (let i = 0; i < pathos.n; i++){ const e = pathos.a[i]; if (!e.benign && !e.dead) hostiles++; }
   const lean = (armInnate === armAdaptive ? 'FULL STACK BUILD' : armInnate > armAdaptive ? 'BACKEND +' + (armInnate-armAdaptive) : 'FRONTEND +' + (armAdaptive-armInnate));
-  const panelW = 430, panelH = 54, panelX = W - 22 - panelW, panelY = H - 96;
-  cx.fillStyle = 'rgba(47,49,141,0.33)'; cx.fillRect(panelX, panelY, panelW, panelH);
+  cx.fillStyle = 'rgba(47,49,141,0.33)'; cx.fillRect(panelX, panelY, panelW, footH);
   cx.textAlign = 'left'; cx.fillStyle = bone; cx.font = RB(33,300); cx.fillText('LVL ' + player.level, panelX + 16, panelY + 39);
   const colA = panelX + 152, colB = panelX + 300;
   cx.font = RB(13,700); cx.fillStyle = bone;
