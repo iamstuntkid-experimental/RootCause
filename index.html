@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Root Cause — a Seer joint</title>
+<title>SEEEEE’R — a Seer joint</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;700;800&display=swap" rel="stylesheet">
@@ -18,6 +18,9 @@
   #game{display:block;width:100vw;height:100vh}
   .overlay{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
     background:radial-gradient(ellipse at center,rgba(20,12,36,.55) 0%,rgba(0,0,0,.95) 76%);z-index:10}
+  /* level-up: blur/darken/desaturate the frozen gameplay behind the cards (cheap — frame is static) */
+  #levelup{background:radial-gradient(ellipse at center,rgba(20,12,36,.35) 0%,rgba(6,3,12,.72) 80%);
+    backdrop-filter:blur(9px) brightness(.62) saturate(.72);-webkit-backdrop-filter:blur(9px) brightness(.62) saturate(.72)}
   .hidden{display:none}
   h1{font-size:clamp(2.2rem,7vw,4.6rem);letter-spacing:.1em;font-weight:700;color:var(--bone);text-transform:uppercase;font-family:ui-monospace,Menlo,Consolas,monospace}
   h1 .c{color:var(--violet);text-shadow:0 0 26px rgba(167,139,255,.6)}
@@ -97,8 +100,8 @@
       </g>
     </svg>
   </div>
-  <h1>Root <span class="c">Cause</span></h1>
-  <div class="sub">a Seer joint &middot; code breaks, fix it faster</div>
+  <h1>SEEEEE<span class="c">’R</span></h1>
+  <div class="sub">Errors are flooding the galaxy! Seer&rsquo;s always on call</div>
   <div class="keys">
     <b>W</b><b>A</b><b>S</b><b>D</b> / arrows move Seer &nbsp;&middot;&nbsp; <b>Space</b> ship an Autofix &nbsp;&middot;&nbsp; <b>Q</b> switch SDK &nbsp;&middot;&nbsp; <b>P</b> pause<br>
     Seer captures issues on its own &mdash; grab yellow events to level up your model<br>
@@ -108,14 +111,14 @@
 </div>
 
 <div id="choose" class="overlay hidden">
-  <h1>Choose your <span class="c">main</span></h1>
-  <div class="sub">your starting integration sets your playstyle</div>
+  <h1>Select your <span class="c">stack</span></h1>
+  <div class="sub">Load up. Squash out.</div>
   <div id="cards2"></div>
 </div>
 
 <div id="levelup" class="overlay hidden">
   <h1 style="font-size:clamp(1.5rem,4vw,2.5rem)">Root cause <span class="c">found</span></h1>
-  <div class="sub">deploy a fix &mdash; choose one</div>
+  <div class="sub">Choose a fix</div>
   <div id="cards"></div>
 </div>
 
@@ -968,6 +971,11 @@ addEventListener('blur', () => { if (state === 'play') togglePause(true); });
 /* ---------- game state ---------- */
 let state = 'menu';
 let time = 0, cleared = 0, shake = 0, fps = 60;
+let hitStop = 0, slowmo = 0, shakeX = 0, shakeY = 0, abT = 0;
+let _abR = null, _abB = null;
+function freeze(sec){ hitStop = Math.max(hitStop, sec); }
+function slowMo(sec){ slowmo = Math.max(slowmo, sec); }
+function kick(ang, mag){ shakeX += Math.cos(ang)*mag; shakeY += Math.sin(ang)*mag; }
 let playerMoving = false;
 // wave system
 let wave = 0, waveState = 'break', waveBudget = 0, waveSpawned = 0, waveSpawnClock = 0, waveClock = 0, breakTimer = 0, waveTheme = null;
@@ -975,15 +983,17 @@ let bossLabel = 'BUG';   // production-incident label drawn on the boss
 let revealT = 0, agentClock = 6, incomingMul = 1;
 let masteredOnce = [false, false, false];
 let waveTotal = 1, waveResolved = 0;
+let tutEV25 = false, tutEV90 = false, tutHP25 = false;
 const musicEngine = (typeof createMusicEngine === 'function') ? createMusicEngine() : null;
 const droneEngine = (typeof createDroneEngine === 'function') ? createDroneEngine() : null;
 const DRONE_SCENE = 'signal';   // menu/loadout ambience (atrium|subfloor|pool|signal|dusk)
 let musFreq = null, drnFreq = null;
-const AUDIO = { sfx: 80, drone: 15, music: 10, musicSlow: 6, musicReverb: 0 };
+const AUDIO = { sfx: 80, drone: 15, music: 0, musicSlow: 6, musicReverb: 0 };
+function bossMusicVol(){ return Math.min(100, AUDIO.music * 2); }
 function applyAudio(k){ Sound.init();
   if (k === 'sfx') Sound.setSfx(AUDIO.sfx/100 * 1.2);
   else if (k === 'drone'){ if (droneEngine) droneEngine.set('vol', AUDIO.drone); }
-  else if (k === 'music' && musicEngine) musicEngine.set('master', (bossRef && !bossRef.dead) ? 40 : AUDIO.music);
+  else if (k === 'music' && musicEngine) musicEngine.set('master', (bossRef && !bossRef.dead) ? bossMusicVol() : AUDIO.music);
   else if (k === 'musicSlow'){ if (musicEngine) musicEngine.set('tempoMul', 1 - AUDIO.musicSlow/100 * 0.5); }
   else if (k === 'musicReverb'){ if (musicEngine) musicEngine.set('reverb', AUDIO.musicReverb); } }
 function musicApplyState(){   // hand off between the drone engine (menus) and arcade engine (play/death)
@@ -996,7 +1006,7 @@ function musicApplyState(){   // hand off between the drone engine (menus) and a
     if (musicEngine){ musicEngine.setMode('death'); musicEngine.set('master', AUDIO.music); if (!musicEngine.isPlaying()) musicEngine.start(); }
   } else {   // play / pause
     if (droneEngine) droneEngine.leave();
-    if (musicEngine){ if (bossRef && !bossRef.dead){ musicEngine.setMode('boss'); musicEngine.set('master', 40); } else { musicEngine.setMode('waves'); musicEngine.set('master', AUDIO.music); } if (!musicEngine.isPlaying()) musicEngine.start(); }
+    if (musicEngine){ if (bossRef && !bossRef.dead){ musicEngine.setMode('boss'); musicEngine.set('master', bossMusicVol()); } else { musicEngine.setMode('waves'); musicEngine.set('master', AUDIO.music); } if (!musicEngine.isPlaying()) musicEngine.start(); }
   } }
 let vizTop = null, vizBot = null;   // smoothed visualizer bar heights
 const TUNE = { xp:0.80, playerDmg:1.05, enemyHp:1.25, heal:0.45, pickupRate:0.85, techDebt:0.090, spawn:1.00, speed:1.00 };
@@ -1138,7 +1148,7 @@ function drawDischarge(){
   for (let i = 0; i < pathos.n && ends.length < 10; i++){ const e = pathos.a[i]; if (e.hidden || e.benign) continue;
     if (dist2(e.x, e.y, boltCX, boltCY) < 360*360) ends.push({ x:e.x, y:e.y, hit:true }); }
   for (let k = 0; k < 2; k++){ const a = rnd()*TAU, R = 360 + rnd()*120; ends.push({ x:boltCX + Math.cos(a)*R, y:boltCY + Math.sin(a)*R, hit:false }); }
-  cx.save(); cx.lineCap = 'round'; cx.lineJoin = 'round';
+  cx.save(); cx.lineCap = 'round'; cx.lineJoin = 'round'; cx.globalCompositeOperation = 'lighter';
   for (const en of ends){
     const b = makeBolt(boltCX, boltCY, en.x, en.y, rnd);
     cx.shadowColor = '#7fdcff'; cx.shadowBlur = 7; cx.strokeStyle = 'rgba(180,235,255,0.6)'; cx.lineWidth = 2.4;
@@ -1554,7 +1564,7 @@ function spawnBoss(n){
   const langs = [0, 1, 2]; for (let i = langs.length - 1; i > 0; i--){ const j = (Math.random()*(i+1))|0; const t = langs[i]; langs[i] = langs[j]; langs[j] = t; }
   e.shields = []; const shp = Math.max(120, e.maxHp * 0.09);   // per-layer shield HP (tunable)
   for (let i = 0; i < tier; i++) e.shields.push({ lang: langs[i % 3], hp: shp, max: shp });
-  placeAtRing(e); bossRef = e; Sound.play('bossspawn'); Sound.setBoss(true); if (musicEngine){ musicEngine.transitionToBoss(); musicEngine.set('master', 40); }
+  placeAtRing(e); bossRef = e; Sound.play('bossspawn'); Sound.setBoss(true); if (musicEngine){ musicEngine.transitionToBoss(); musicEngine.set('master', bossMusicVol()); }
 }
 /* ---------- AI agent behaviour (benign drift/steal · rogue flee/emit) ---------- */
 const agentRefs = [];
@@ -1566,7 +1576,7 @@ function resolveAgents(x, y, r){   // push an entity out of any solid agent it o
 function goRogue(e){
   e.benign = false; e.dmg = EN.agent.dmg * (1 + 0.08 * (e.grow || 0)); e.emitT = 1.0; e.emitN = 0;
   e.vx *= 0.3; e.vy *= 0.3; e.flash = 0.12; shake = Math.max(shake, 5);
-  banners.push({ text: 'AGENT WENT ROGUE', sub: 'it is shipping broken code — kill it fast', life: 1.8, color: '#ee4d9b' });
+  banners.push({ text: 'AGENT WENT ROGUE', sub: 'kill it fast', life: 1.8, color: '#ee4d9b' });
 }
 function feedAgent(e){   // eating a token compounds size + damage gently, up to a cap
   e.grow = Math.min(10, (e.grow || 0) + 1);
@@ -1613,7 +1623,7 @@ function startWave(n){
   wave = n;
   if (n % 5 === 0){
     waveState = 'boss'; spawnBoss(n); shake = Math.max(shake, 10);
-    banners.push({ text: 'PRODUCTION INCIDENT', sub: 'root-cause the ' + bossLabel + ' — wave ' + n, life: 2.8, color: '#ff5240' });
+    banners.push({ text: 'PRODUCTION INCIDENT', sub: 'root cause the ' + bossLabel, life: 2.8, color: '#ff5240' });
     return;
   }
   waveBudget = Math.round((9 + n * 1.6) * TUNE.spawn);
@@ -1627,6 +1637,7 @@ function enterBreak(clean){
   waveState = 'break'; breakTimer = clean ? 2.6 : 1.2;
   if (clean){
     banners.push({ text: 'DEPLOY SUCCESSFUL', sub: 'wave ' + wave + ' resolved', life: 1.8, color: '#6cc406' });
+    slowMo(0.4);
     dropConsumable(player.x + rand(-30, 30), player.y + rand(-30, 30), true);
   }
 }
@@ -1920,10 +1931,10 @@ function hitPatho(e, dmg, knockA, src){
     if (!matched && Math.random() < 0.4) burst(e.x, e.y, '#8a8a8a', 2);
     if (sh.hp <= 0){ e.shields.pop();
       player.mastery[sh.lang] = Math.min(1, player.mastery[sh.lang] + 1/15);
-      burst(e.x, e.y, STRAINS[sh.lang].c, 20); shake = Math.max(shake, 8); Sound.play('shield');
+      burst(e.x, e.y, STRAINS[sh.lang].c, 20); shake = Math.max(shake, 8); Sound.play('shield'); freeze(0.06);
       if (player.mastery[sh.lang] >= 1 && !masteredOnce[sh.lang]){ masteredOnce[sh.lang] = true;
         banners.push({ text: STRAINS[sh.lang].n.toUpperCase() + ' MASTERED', sub: 'you shred ' + STRAINS[sh.lang].n + ' shields on contact', life: 2.4, color: STRAINS[sh.lang].c }); }
-      if (e.shields.length === 0) banners.push({ text: 'CONTEXT RESTORED', sub: 'the incident is exposed — resolve it', life: 2, color: '#6cc406' });
+      if (e.shields.length === 0) banners.push({ text: 'CONTEXT RESTORED', sub: 'the incident is exposed…resolve it!', life: 2, color: '#6cc406' });
     }
     return;
   }
@@ -1935,7 +1946,7 @@ function hitPatho(e, dmg, knockA, src){
     if (e.shieldHp <= 0){
       e.shieldHp = 0; e.shieldMax = 0;
       player.mastery[lang] = Math.min(1, player.mastery[lang] + 1/15);
-      burst(e.x, e.y, STRAINS[lang].c, 16); shake = Math.max(shake, 4); Sound.play('shield');
+      burst(e.x, e.y, STRAINS[lang].c, 16); shake = Math.max(shake, 4); Sound.play('shield'); freeze(0.04);
       if (player.mastery[lang] >= 1 && !masteredOnce[lang]){ masteredOnce[lang] = true;
         banners.push({ text: STRAINS[lang].n.toUpperCase() + ' MASTERED', sub: 'you shred ' + STRAINS[lang].n + ' shields on contact', life: 2.4, color: STRAINS[lang].c }); }
     }
@@ -1956,6 +1967,7 @@ function killPatho(e){
   Sound.play(e.kind === 'boss' ? 'bosskill' : 'kill');
   if (!e.benign && e.kind !== 'boss' && e.kind !== 'agent') waveResolved++;
   e.dead = true; cleared++;
+  for (let q = 0; q < 3; q++){ if (parts.n >= MAX_PARTS) break; const pt = parts.get(); const a = Math.random()*TAU, sp = rand(60, 200); pt.x = e.x; pt.y = e.y; pt.vx = Math.cos(a)*sp; pt.vy = Math.sin(a)*sp; pt.life = rand(.12,.22); pt.color = '#ffffff'; pt.r = rand(1.5,3); }
   if (player.lifesteal) player.hp = Math.min(player.maxHp, player.hp + player.lifesteal * TUNE.heal);
   memKills[e.kind] = (memKills[e.kind] || 0) + 1;
   if (!memUnlocked[e.kind] && memKills[e.kind] >= (MEM_THRESH[e.kind] || 999)){
@@ -1965,13 +1977,13 @@ function killPatho(e){
   const col = e.kind === 'superbug' || e.kind === 'boss' ? '#ff9d2e' : e.kind === 'virus' || e.kind === 'mutant' ? '#d05ce8' : '#8fd46a';
   burst(e.x, e.y, col, e.kind === 'biofilm' || e.kind === 'superbug' || e.kind === 'boss' ? 16 : 8);
   if (e.kind === 'boss'){
-    bossRef = null; shake = Math.max(shake, 14); Sound.setBoss(false); if (musicEngine){ musicEngine.setMode('waves'); musicEngine.set('master', AUDIO.music); musicEngine.duck(0.4, 140); }
+    bossRef = null; shake = Math.max(shake, 16); Sound.setBoss(false); freeze(0.14); slowMo(0.6); kick(rand(0,TAU), 10); abT = 0.22; if (musicEngine){ musicEngine.setMode('waves'); musicEngine.set('master', AUDIO.music); musicEngine.duck(0.4, 140); }
     for (let i = 0; i < 6; i++) dropAntigen(e.x + rand(-40,40), e.y + rand(-40,40), 10);
     dropConsumable(e.x - 20, e.y, true); dropConsumable(e.x + 20, e.y, true);
-    banners.push({ text: 'INCIDENT RESOLVED', sub: 'production is green again', life: 2.8, color: '#6cc406' });
+    banners.push({ text: 'INCIDENT RESOLVED', sub: '', life: 2.8, color: '#6cc406' });
   } else if (e.kind === 'agent'){
     burst(e.x, e.y, '#ee4d9b', 16); shake = Math.max(shake, 6);   // no tokens back, no drops
-    banners.push({ text: 'ROGUE AGENT TERMINATED', sub: 'threat neutralized', life: 1.6, color: '#6cc406' });
+    banners.push({ text: 'ROGUE AGENT TERMINATED', sub: '', life: 1.6, color: '#6cc406' });
   } else if (e.kind === 'superbug'){
     dropAntigen(e.x, e.y, 10); dropAntigen(e.x + rand(-20,20), e.y + rand(-20,20), 10);
     dropConsumable(e.x, e.y, true); shake = Math.max(shake, 9);
@@ -2047,7 +2059,7 @@ function cytokineDischarge(){
     p.x = player.x; p.y = player.y; p.vx = Math.cos(a)*rand(120,360); p.vy = Math.sin(a)*rand(120,360);
     p.life = rand(.3,.6); p.color = '#a78bff'; p.r = rand(2,4); if (parts.n >= MAX_PARTS) break; }
   banners.push({ text: 'AUTOFIX SHIPPED', sub: 'merge-ready patch cleared the board', life: 1.6, color: '#a78bff' });
-  cyto = 0; shake = Math.max(shake, 10); Sound.play('discharge'); if (musicEngine) musicEngine.duck(0.4, 120);
+  cyto = 0; shake = Math.max(shake, 10); Sound.play('discharge'); if (musicEngine) musicEngine.duck(0.4, 120); freeze(0.05);
   boltT = boltDur; boltCX = player.x; boltCY = player.y; flashT = 0.28; flashColor = '#dffbff';
 }
 function triggerStorm(){
@@ -2255,6 +2267,10 @@ function renderLevelup(){
 /* ---------- update ---------- */
 function update(dt){
   if (musicEngine) musicEngine.setPressure(clamp(pathos.n / MAX_PATHO, 0, 1));
+  // first-time coaching
+  if (!tutEV25 && cyto >= CYTO_MAX*0.25){ tutEV25 = true; banners.push({ text: 'EVENT VOLUME AT 25%', sub: 'press SPACEBAR to deploy an Autofix', life: 3.2, color: '#12a5c9' }); }
+  if (!tutEV90 && cyto >= CYTO_MAX*0.90){ tutEV90 = true; banners.push({ text: 'EVENT VOLUME AT 90%', sub: 'press SPACEBAR now to avoid an EVENT VOLUME INCIDENT', life: 3.5, color: '#ff9838' }); }
+  if (!tutHP25 && player.hp <= player.maxHp*0.25){ tutHP25 = true; banners.push({ text: 'UPTIME MONITOR AT 25%', sub: 'restore uptime before you go down', life: 3.5, color: '#ff5240' }); }
   time += dt; player.frame += dt;
   let mx = (keys.d || keys.arrowright ? 1 : 0) - (keys.a || keys.arrowleft ? 1 : 0);
   let my = (keys.s || keys.arrowdown ? 1 : 0) - (keys.w || keys.arrowup ? 1 : 0);
@@ -2310,7 +2326,7 @@ function update(dt){
     else if (e.kind === 'bomber'){
       if (!e.primed && dist2(e.x, e.y, player.x, player.y) < 150*150){ e.primed = true; e.atkT = 1.1; }
       if (e.primed){ e.flash = 0.08; e.atkT -= dt; if (e.atkT <= 0){
-        if (dist2(e.x, e.y, player.x, player.y) < 95*95 && player.iframes <= 0 && shieldT <= 0){ player.hp -= 42 * incomingMul; player.iframes = 0.7; shake = Math.max(shake, 12); Sound.play('hurt'); Sound.play('wub'); if (musicEngine) musicEngine.duck(0.5, 120); if (player.hp <= 0) return gameOver(); }
+        if (dist2(e.x, e.y, player.x, player.y) < 95*95 && player.iframes <= 0 && shieldT <= 0){ player.hp -= 42 * incomingMul; player.iframes = 0.7; shake = Math.max(shake, 12); Sound.play('hurt'); Sound.play('wub'); if (musicEngine) musicEngine.duck(0.5, 120); freeze(0.05); kick(Math.atan2(player.y - e.y, player.x - e.x), 9); abT = 0.18; if (player.hp <= 0) return gameOver(); }
         burst(e.x, e.y, '#ff5240', 26); shake = Math.max(shake, 12); e.dead = true;
       } }
     }
@@ -2365,7 +2381,7 @@ function update(dt){
       if (!hitBy && !e.dead && !e.hidden && !e.benign && dist2(e.x, e.y, player.x, player.y) < (e.r+player.r)*(e.r+player.r)) hitBy = e;
     });
     if (hitBy){
-      player.hp -= hitBy.dmg * (stormT > 0 ? 2 : 1) * incomingMul; player.iframes = 0.7; shake = Math.max(shake, 8); Sound.play('hurt'); Sound.play('wub');
+      player.hp -= hitBy.dmg * (stormT > 0 ? 2 : 1) * incomingMul; player.iframes = 0.7; shake = Math.max(shake, 8); Sound.play('hurt'); Sound.play('wub'); abT = Math.max(abT, 0.12);
       burst(player.x, player.y, '#ffcf4f', 10);
       if (player.hp <= 0) return gameOver();
     }
@@ -2387,7 +2403,7 @@ function update(dt){
   for (let i = 0; i < ebullets.n; i++){
     const b = ebullets.a[i]; b.x += b.vx*dt; b.y += b.vy*dt; b.life -= dt;
     if (b.life > 0 && player.iframes <= 0 && shieldT <= 0 && dist2(b.x, b.y, player.x, player.y) < (player.r+5)*(player.r+5)){
-      player.hp -= b.dmg * incomingMul; player.iframes = 0.6; shake = Math.max(shake, 6); b.life = 0; Sound.play('hurt'); Sound.play('wub');
+      player.hp -= b.dmg * incomingMul; player.iframes = 0.6; shake = Math.max(shake, 6); b.life = 0; Sound.play('hurt'); Sound.play('wub'); abT = Math.max(abT, 0.12);
       if (player.hp <= 0) return gameOver();
     }
     if (b.life <= 0){ ebullets.kill(i); i--; }
@@ -2433,12 +2449,26 @@ function updateRBC(dt){
     if (dist2(c.x, c.y, player.x, player.y) > wrapR*wrapR){ const a = Math.random()*TAU, R = Math.hypot(W,H)/2 + rand(20,110); c.x = player.x + Math.cos(a)*R; c.y = player.y + Math.sin(a)*R; } }
 }
 
+function drawAberration(dx){
+  const w = cv.width, h = cv.height;
+  if (!_abR){ _abR = document.createElement('canvas'); _abB = document.createElement('canvas'); }
+  if (_abR.width !== w || _abR.height !== h){ _abR.width = _abB.width = w; _abR.height = _abB.height = h; }
+  const r = _abR.getContext('2d'), b = _abB.getContext('2d');
+  r.globalCompositeOperation = 'source-over'; r.clearRect(0,0,w,h); r.drawImage(cv,0,0);
+  r.globalCompositeOperation = 'multiply'; r.fillStyle = '#ff0000'; r.fillRect(0,0,w,h);
+  b.globalCompositeOperation = 'source-over'; b.clearRect(0,0,w,h); b.drawImage(cv,0,0);
+  b.globalCompositeOperation = 'multiply'; b.fillStyle = '#00ffff'; b.fillRect(0,0,w,h);
+  cx.globalCompositeOperation = 'source-over'; cx.fillStyle = '#000'; cx.fillRect(0,0,w,h);
+  cx.globalCompositeOperation = 'lighter';
+  cx.drawImage(_abR, -dx, 0); cx.drawImage(_abB, dx, 0);
+  cx.globalCompositeOperation = 'source-over';
+}
 /* ---------- draw ---------- */
 function draw(){
   drawBackground();
 
   cx.save();
-  const sx = shake ? rand(-shake, shake) : 0, sy = shake ? rand(-shake, shake) : 0;
+  const sx = (shake ? rand(-shake, shake) : 0) + shakeX, sy = (shake ? rand(-shake, shake) : 0) + shakeY;
   cx.translate(W/2 - player.x + sx, H/2 - player.y + sy);
 
   cx.textAlign = 'left'; cx.textBaseline = 'middle';
@@ -2526,7 +2556,9 @@ function draw(){
     cx.globalAlpha = 0.55 + 0.2*Math.sin(player.frame*8); cx.strokeStyle = '#5cc6ff'; cx.shadowColor = '#12a5c9'; cx.shadowBlur = 12; cx.lineWidth = 2.4/sc;
     roundTri(cx, SEER.TRI, 3.6); cx.stroke(); cx.restore(); }
 
+  cx.globalCompositeOperation = 'lighter';
   for (let i = 0; i < parts.n; i++){ const p = parts.a[i]; cx.globalAlpha = clamp(p.life*2.4,0,1); cx.fillStyle = p.color; cx.beginPath(); cx.arc(p.x, p.y, p.r, 0, TAU); cx.fill(); }
+  cx.globalCompositeOperation = 'source-over';
   cx.globalAlpha = 1; cx.textAlign = 'center';
   for (let i = 0; i < texts.n; i++){ const t = texts.a[i]; cx.globalAlpha = clamp(t.life*2,0,1);
     cx.fillStyle = t.crit ? '#ffd76a' : '#fff'; cx.font = (t.crit ? '16px' : '13px') + ' ui-monospace,monospace'; cx.fillText(t.v, t.x, t.y); }
@@ -2536,7 +2568,21 @@ function draw(){
   if (feverT > 0){ cx.fillStyle = 'rgba(255,120,40,' + (0.05 + 0.04*Math.sin(player.frame*3)) + ')'; cx.fillRect(0,0,W,H); }
   if (stormT > 0){ cx.fillStyle = 'rgba(255,40,40,' + (0.08 + 0.06*Math.sin(player.frame*10)) + ')'; cx.fillRect(0,0,W,H); }
   if (flashT > 0){ cx.save(); cx.globalAlpha = clamp(flashT/0.3, 0, 1) * 0.22; cx.fillStyle = flashColor; cx.fillRect(0,0,W,H); cx.restore(); }
+  // low-uptime danger vignette — red heartbeat pulse that intensifies toward death
+  const lowHp = clamp((0.3 - player.hp/player.maxHp) / 0.3, 0, 1);
+  if (lowHp > 0){ const puls = 0.5 + 0.5*Math.sin(player.frame * (5 + lowHp*9));
+    const g = cx.createRadialGradient(W/2, H/2, Math.min(W,H)*0.28, W/2, H/2, Math.max(W,H)*0.62);
+    g.addColorStop(0, 'rgba(255,30,30,0)'); g.addColorStop(1, 'rgba(200,10,10,' + (lowHp*(0.28 + 0.30*puls)).toFixed(3) + ')');
+    cx.fillStyle = g; cx.fillRect(0,0,W,H); }
   drawVignette(); drawHUD();
+  // chromatic aberration on high-drama moments (subtle, brief)
+  let ab = 0;
+  if (stormT > 0) ab = 2 + Math.abs(Math.sin(player.frame*18))*1.4;
+  if (bossRef && !bossRef.dead && bossRef.attackT > 0) ab = Math.max(ab, 1.8);
+  if (boltT > 0) ab = Math.max(ab, 2.6);                                              // Autofix lightning
+  if (player.hp <= player.maxHp*0.05) ab = Math.max(ab, 1.6 + Math.abs(Math.sin(player.frame*14))*1.6);  // critical uptime
+  if (abT > 0) ab = Math.max(ab, Math.min(4, abT*26));
+  if (ab > 0.4) drawAberration(ab);
 }
 function drawVignette(){
   const v = cx.createRadialGradient(W/2, H/2, Math.min(W,H)*.38, W/2, H/2, Math.max(W,H)*.72);
@@ -2581,36 +2627,43 @@ function drawHUD(){
   // dual visualizers (full width, dashed baseline, 33% opacity)
   drawViz(true);   // top spectrum only
 
-  // ===== full-width UPTIME + EVENT VOLUME bars (like the top XP bar) =====
-  const hbY = H - 17, evY = H - 8, fbH = 7;
+  // ===== full-width UPTIME + EVENT VOLUME bars (labelled inside, like the SDK bars) =====
+  const fbH = 16, hbY = H - 34, evY = H - 16;
+  const barLabel = (txt, y) => { cx.save(); cx.shadowColor = 'rgba(0,0,0,.55)'; cx.shadowBlur = 2; cx.fillStyle = '#ffffff'; cx.font = RB(9,700); cx.textAlign = 'left'; cx.fillText(txt, 9, y + fbH/2 + 3); cx.restore(); };
   cx.fillStyle = TRACK; cx.fillRect(0, hbY, W, fbH);
   cx.fillStyle = player.hp < player.maxHp*.3 ? '#ff5240' : '#67c800'; cx.fillRect(0, hbY, W*clamp(player.hp/player.maxHp,0,1), fbH);
+  barLabel('UPTIME MONITOR', hbY);
   const segCols = ['#ffd00e','#ff9838','#fc746f','#f53a9f'], segGap = 4, segW = (W - segGap*3)/4, ck = clamp(cyto/CYTO_MAX,0,1);
   for (let i = 0; i < 4; i++){ const sx = i*(segW+segGap);
     cx.fillStyle = TRACK; cx.fillRect(sx, evY, segW, fbH);
     const f = clamp((ck - i*0.25)/0.25, 0, 1); if (f > 0){ cx.fillStyle = stormT>0 ? '#ff5240' : segCols[i]; cx.fillRect(sx, evY, segW*f, fbH); } }
+  barLabel(stormT>0 ? 'EVENT VOLUME — INCIDENT' : 'EVENT VOLUME', evY);
 
-  // ===== SDK — left-aligned, stretches to 25% of the screen =====
-  const sdkTotalW = clamp(W*0.25, 240, 640), boxW = 40, gap1 = 12, boxH = 46, rowH = 15;
-  const sdkX = 22, sdkY = H - 74, barsX = sdkX + boxW + gap1, barsW = sdkTotalW - boxW - gap1;
+  // ===== SDK — active-language box + three mastery bars (heights match the LVL box) =====
   const sc = STRAINS[player.strain].c;
-  cx.fillStyle = sc; cx.fillRect(sdkX, sdkY, boxW, boxH);
-  cx.fillStyle = 'rgba(10,6,20,.85)'; cx.textAlign = 'center'; cx.font = RB(12,800);
-  cx.fillText('S', sdkX+boxW/2, sdkY+14); cx.fillText('D', sdkX+boxW/2, sdkY+28); cx.fillText('K', sdkX+boxW/2, sdkY+42);
+  const infoPanelW = 430, infoPanelX = W - 22 - infoPanelW;
+  const bandTop = H - 96, bandH = 54;                       // matches the info (LVL) box
+  const boxX = 22, boxW = 92;
+  const barsX = boxX + boxW + 16, barsRight = infoPanelX - 20, barsW = Math.max(140, barsRight - barsX);
+  const barH = 16, gap = 3, rowStep = barH + gap;           // 3 bars + 2 gaps = 54, matching the box
+  // SDK box — opaque, active-language colour, square corners; "SDK" centred in dark purple
+  cx.fillStyle = sc; cx.fillRect(boxX, bandTop, boxW, bandH);
+  cx.fillStyle = '#2e1a5e'; cx.font = RB(33,300); cx.textAlign = 'center';
+  cx.fillText('SDK', boxX + boxW/2, bandTop + bandH/2 + 11);
   for (let i = 0; i < STRAINS.length; i++){
-    const ry = sdkY + 4 + i*rowH, active = i === player.strain;
-    cx.textAlign = 'left'; cx.font = RB(8,700); cx.fillStyle = active ? bone : muted; cx.fillText(STRAINS[i].n.toUpperCase(), barsX, ry - 1);
-    cx.fillStyle = TRACK; cx.fillRect(barsX, ry+2, barsW, 7);
-    cx.fillStyle = STRAINS[i].c; cx.globalAlpha = active ? 1 : 0.55; cx.fillRect(barsX, ry+2, barsW*clamp(player.mastery[i],0,1), 7); cx.globalAlpha = 1;
-    if (active){ cx.strokeStyle = '#fff'; cx.lineWidth = 1; cx.strokeRect(barsX-.5, ry+1.5, barsW+1, 8);
-      cx.strokeStyle = sc; cx.lineWidth = 2; cx.beginPath(); cx.moveTo(sdkX+boxW, ry+5); cx.lineTo(barsX, ry+5); cx.stroke(); }
+    const ry = bandTop + i*rowStep, active = i === player.strain;
+    cx.globalAlpha = 0.3; cx.fillStyle = STRAINS[i].c; cx.fillRect(barsX, ry, barsW, barH);       // 30% color track
+    cx.globalAlpha = 1; cx.fillRect(barsX, ry, barsW * clamp(player.mastery[i],0,1), barH);        // opaque as it fills
+    cx.save(); cx.shadowColor = 'rgba(0,0,0,.55)'; cx.shadowBlur = 2;
+    cx.fillStyle = active ? '#ffffff' : 'rgba(255,255,255,.62)'; cx.font = RB(9,700); cx.textAlign = 'left';
+    cx.fillText(STRAINS[i].n.toUpperCase(), barsX + 9, ry + barH/2 + 3); cx.restore();
   }
 
   // ===== bottom-right info panel (fixed width, container box) =====
   let hostiles = 0; for (let i = 0; i < pathos.n; i++){ const e = pathos.a[i]; if (!e.benign && !e.dead) hostiles++; }
   const lean = (armInnate === armAdaptive ? 'FULL STACK BUILD' : armInnate > armAdaptive ? 'BACKEND +' + (armInnate-armAdaptive) : 'FRONTEND +' + (armAdaptive-armInnate));
-  const panelW = 430, panelH = 54, panelX = W - 22 - panelW, panelY = H - 80;
-  cx.fillStyle = 'rgba(47,49,141,0.33)'; roundRect(cx, panelX, panelY, panelW, panelH, 8); cx.fill();
+  const panelW = 430, panelH = 54, panelX = W - 22 - panelW, panelY = H - 96;
+  cx.fillStyle = 'rgba(47,49,141,0.33)'; cx.fillRect(panelX, panelY, panelW, panelH);
   cx.textAlign = 'left'; cx.fillStyle = bone; cx.font = RB(33,300); cx.fillText('LVL ' + player.level, panelX + 16, panelY + 39);
   const colA = panelX + 152, colB = panelX + 300;
   cx.font = RB(13,700); cx.fillStyle = bone;
@@ -2648,7 +2701,7 @@ function drawHUD(){
   }
   if (state === 'pause'){
     cx.fillStyle = 'rgba(6,4,12,.7)'; cx.fillRect(0,0,W,H); cx.fillStyle = bone; cx.font = RB(34,800); cx.textAlign = 'center';
-    cx.fillText('PAUSED', W/2, H/2); cx.font = RB(13,500); cx.fillText('grabbing coffee — press P to resume', W/2, H/2+28);
+    cx.fillText('PAUSED', W/2, H/2); cx.font = RB(13,500); cx.fillText('considering new career — press P to continue', W/2, H/2+28);
   }
 }
 
@@ -2688,7 +2741,7 @@ function restartCore(starter){
   ctls.clear(); pulses.clear(); nets.clear(); lobs.clear(); ebullets.clear(); booms.clear();
   time = 0; cleared = 0; shake = 0;
   feverT = shieldT = opsoninT = stormT = cyto = autoimmune = hasteT = regenT = flashT = 0; armInnate = armAdaptive = 0; banners = [];
-  wave = 0; waveState = 'break'; bossRef = null; revealT = 0; pendingLevels = 0; banished.clear(); masteredOnce = [false, false, false]; boltT = 0; Sound.setBoss(false);
+  wave = 0; waveState = 'break'; bossRef = null; revealT = 0; pendingLevels = 0; banished.clear(); masteredOnce = [false, false, false]; boltT = 0; tutEV25 = tutEV90 = tutHP25 = false; Sound.setBoss(false);
   for (const k in memKills) delete memKills[k]; for (const k in memUnlocked) delete memUnlocked[k];
   resetPlayer();
   player.weapons[starter] = WTRACKS.find(w => w.key === starter).acquire();
@@ -2763,9 +2816,14 @@ document.getElementById('restartBtn').onclick = restart;
 let last = performance.now();
 function loop(now){
   requestAnimationFrame(loop);
-  const dt = Math.min(0.033, (now - last) / 1000); last = now;
-  fps += ((dt > 0 ? 1/dt : 60) - fps) * 0.05;
-  if (state === 'play') update(dt);
+  const rdt = Math.min(0.05, (now - last) / 1000); last = now;
+  fps += ((rdt > 0 ? 1/rdt : 60) - fps) * 0.05;
+  shakeX *= 0.82; shakeY *= 0.82;   // directional shake decays
+  if (abT > 0) abT -= rdt;
+  if (state === 'play'){
+    if (hitStop > 0){ hitStop -= rdt; }               // frozen frame — draw but don't advance
+    else { if (slowmo > 0) slowmo -= rdt; update(Math.min(0.033, rdt) * (slowmo > 0 ? 0.4 : 1)); }
+  }
   if (state === 'menu'){ drawBackground(); drawVignette(); }
   else draw();
 }
