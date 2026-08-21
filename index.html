@@ -1209,7 +1209,7 @@ function musicApplyState(){   // hand off between the drone engine (menus) and a
     if (musicEngine){ if (bossRef && !bossRef.dead){ applyMusicPreset('boss'); musicEngine.setMode('boss'); } else { applyMusicPreset('waves'); musicEngine.setMode('waves'); } if (!musicEngine.isPlaying()) musicEngine.start(); }
   } }
 let vizTop = null, vizBot = null;   // smoothed visualizer bar heights
-const TUNE = { xp:0.80, playerDmg:1.05, enemyHp:1.25, heal:0.45, pickupRate:0.85, techDebt:0.090, spawn:1.00, speed:1.00 };
+const TUNE = { xp:0.80, playerDmg:1.05, enemyHp:1.25, heal:0.45, pickupRate:0.85, techDebt:0.090, spawn:1.00, speed:1.00, evPace:0.03 };
 
 // ---- synthesized SFX engine (Web Audio; spacey bleep-bloop, zero assets) ----
 const Sound = (function(){
@@ -2170,7 +2170,7 @@ function hitPatho(e, dmg, knockA, src){
   }
   e.hp -= dealt; e.flash = 0.08; if (e.kind === 'boss') bossReact(e);
   if (knockA !== undefined && e.kind !== 'biofilm' && e.kind !== 'superbug'){ e.x += Math.cos(knockA)*5; e.y += Math.sin(knockA)*5; }
-  cyto = Math.min(CYTO_MAX, cyto + dealt * 0.03);
+  cyto = Math.min(CYTO_MAX, cyto + dealt * 0.03 / (1 + (player.level - 1) * TUNE.evPace));
   if (stormT <= 0 && cyto >= CYTO_MAX) triggerStorm();
   if (src !== 'field' && texts.n < MAX_TEXTS){ const t = texts.get(); t.x = e.x + rand(-6,6); t.y = e.y - e.r; t.v = dealt|0; t.life = 0.6; t.crit = crit; }
   if (e.hp <= 0) killPatho(e);
@@ -2394,7 +2394,7 @@ const WTRACKS = [
 const PTRACKS = [
   { key:'crit', name:'Suspect Commit', max:5, desc:l=>'+10% chance to crit for 2.5x (now '+(l*10)+'%).', f:()=>{ player.crit = Math.min(0.6, player.crit + 0.10); } },
   { key:'area', name:'Sampling Rate', max:5, desc:l=>'All zones & pulses +15% larger.', f:()=>{ player.areaMul += 0.15; } },
-  { key:'resolve', name:'Resolve', max:5, desc:l=>'Restore +2 uptime per issue resolved.', f:()=>{ player.lifesteal += 2; } },
+  { key:'resolve', name:'Resolve', max:5, desc:l=>'Restore +1 uptime per issue resolved.', f:()=>{ player.lifesteal += 1; } },
   { key:'cicd', name:'CI/CD', max:5, desc:l=>'All tools cool down 8% faster.', f:()=>{ player.cdMul *= 0.92; } },
   { key:'amount', name:'Concurrency', max:3, desc:l=>'+1 projectile to capture, beams & boomerangs.', f:()=>{ player.amount += 1; } },
   { key:'duration', name:'Retention', max:5, desc:l=>'Alerts, spans & captures last +20% longer.', f:()=>{ player.durMul += 0.2; } },
@@ -3153,9 +3153,10 @@ document.getElementById('scoreUsername').addEventListener('input', () => {
     ['pickupRate', 'Pickup rate', 0.25, 2, 0.05],
     ['techDebt', 'Tech Debt / wave', 0, 0.2, 0.005],
     ['spawn', 'Spawn density', 0.5, 2, 0.05],
-    ['speed', 'Seer speed', 0.5, 2, 0.05]
+    ['speed', 'Seer speed', 0.5, 2, 0.05],
+    ['evPace', 'Event Volume pacing', 0, 0.1, 0.005]
   ];
-  const fmt = (k, v) => k === 'techDebt' ? v.toFixed(3) : v.toFixed(2);
+  const fmt = (k, v) => (k === 'techDebt' || k === 'evPace') ? v.toFixed(3) : v.toFixed(2);
   let head = document.createElement('h4'); head.textContent = 'Tuning  ·  press ` to toggle'; panel.appendChild(head);
   const vals = {};
   for (const [key, label, min, max, step] of cfg){
@@ -3178,7 +3179,8 @@ document.getElementById('scoreUsername').addEventListener('input', () => {
   const hint = document.createElement('div'); hint.className = 'hint'; hint.textContent = 'select the line above to copy your settings'; panel.appendChild(hint);
   function updateCopy(){ copy.textContent = cfg.map(([k]) => k + '=' + fmt(k, TUNE[k])).join('  ') + '  sfx=' + AUDIO.sfx + '  drone=' + AUDIO.drone + '  music=' + AUDIO.music + '  musicSlow=' + AUDIO.musicSlow + '  musicReverb=' + AUDIO.musicReverb; }
   updateCopy();
-  addEventListener('keydown', e => { if (e.key === '`'){ panel.classList.toggle('hidden'); } });
+  // Disabled for now — kept in place in case we need the dev panel again. Uncomment to restore:
+  // addEventListener('keydown', e => { if (e.key === '`'){ panel.classList.toggle('hidden'); } });
 })();
 document.getElementById('restartBtn').onclick = restart;
 
