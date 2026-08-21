@@ -191,7 +191,7 @@
   </form>
   <div class="gameover-actions">
     <button class="btn secondary" id="gameoverLeaderboardBtn">Leaderboard</button>
-    <button class="btn" id="restartBtn">Roll back and retry</button>
+    <button class="btn secondary" id="restartBtn">Roll back and retry</button>
   </div>
 </div>
 
@@ -1130,6 +1130,7 @@ addEventListener('keydown', e => {
   const interactive = e.target instanceof HTMLElement && Boolean(e.target.closest('input,button,select,textarea'));
   if (k === 'escape' && !document.getElementById('leaderboard').classList.contains('hidden')) { closeLeaderboard(); return; }
   if (interactive) return;
+  if (e.repeat) return;   // ignore held-key auto-repeat — a spacebar held through death shouldn't instantly restart
   keys[k] = true;
   if (k === ' ' || k.startsWith('arrow')) e.preventDefault();
   if (k === 'p') { togglePause(); return; }
